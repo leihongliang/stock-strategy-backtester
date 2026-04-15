@@ -7,7 +7,7 @@ class StockCompany(BaseModel):
     用于表示A股公司的基本信息，包括股票代码、名称、市场等。
     数据存储在数据库的stock_company集合中。
     """
-    sec_code: int     # 股票代码（数字格式，如600000）
+    sec_code: str     # 股票代码（字符串格式，如"600000"）
     sec_name: str     # 股票名称
     market: str       # 市场（SH/SZ）
     industry: str     # 行业

@@ -96,8 +96,10 @@ class TushareProvider:
                         # 重置索引
                         k_data = k_data.reset_index(drop=True)
 
-                        # 移除股票代码前缀，转换为数字
-                        sec_code = int(stock_code.replace('SH', '').replace('SZ', ''))
+                        # 移除股票代码前缀，保持为字符串
+                        sec_code = stock_code.replace('SH', '').replace('SZ', '')
+                        # 确保股票代码为6位字符串
+                        sec_code = sec_code.zfill(6)
 
                         for _, row in k_data.iterrows():
                             # 将价格乘以100转换为整数
@@ -225,8 +227,10 @@ class TushareProvider:
                         ts_code = row['ts_code']
                         stock_code = stock_code_map.get(ts_code, ts_code)
 
-                        # 移除股票代码前缀，转换为数字
-                        sec_code = int(stock_code.replace('SH', '').replace('SZ', '').replace('.SH', '').replace('.SZ', ''))
+                        # 移除股票代码前缀，保持为字符串
+                        sec_code = stock_code.replace('SH', '').replace('SZ', '').replace('.SH', '').replace('.SZ', '')
+                        # 确保股票代码为6位字符串
+                        sec_code = sec_code.zfill(6)
 
                         # 将价格乘以100转换为整数
                         open_price = int(float(row['open']) * 100)

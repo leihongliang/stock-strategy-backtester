@@ -67,9 +67,11 @@ class AkShareProvider:
             stock_info_sh = ak.stock_info_sh_name_code()
             for _, row in stock_info_sh.iterrows():
                 # Get stock code
-                sec_code = int(row.get('证券代码', 0))
+                sec_code = str(row.get('证券代码', ''))
                 if not sec_code:
                     continue
+                # 确保股票代码为6位字符串
+                sec_code = sec_code.zfill(6)
                 
                 # Get stock name
                 sec_name = row.get('证券简称', '')
@@ -101,9 +103,11 @@ class AkShareProvider:
             stock_info_sz = ak.stock_info_sz_name_code()
             for _, row in stock_info_sz.iterrows():
                 # Get stock code
-                sec_code = int(row.get('A股代码', 0))
+                sec_code = str(row.get('A股代码', ''))
                 if not sec_code:
                     continue
+                # 确保股票代码为6位字符串
+                sec_code = sec_code.zfill(6)
                 
                 # Get stock name
                 sec_name = row.get('A股简称', '')

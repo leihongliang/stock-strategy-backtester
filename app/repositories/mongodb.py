@@ -194,7 +194,7 @@ class MongoDBRepository:
         
         try:
             # 查询指定股票代码的公司信息
-            doc = self.company_collection.find_one({'sec_code': int(sec_code)}, {'_id': 0})
+            doc = self.company_collection.find_one({'sec_code': sec_code}, {'_id': 0})
             return doc
         except Exception as e:
             logger.error(f"根据股票代码获取公司信息失败: {e}")
@@ -295,7 +295,15 @@ class MongoDBRepository:
             )
             
             if latest_doc and 'trade_date' in latest_doc:
-                return date.fromisoformat(latest_doc['trade_date'])
+                trade_date = latest_doc['trade_date']
+                # 处理datetime类型的trade_date
+                if hasattr(trade_date, 'date'):
+                    return trade_date.date()
+                # 兼容处理字符串类型的trade_date（用于旧数据）
+                try:
+                    return date.fromisoformat(trade_date)
+                except:
+                    pass
             return None
         except Exception as e:
             logger.error(f"获取最新交易日日期失败: {e}")
@@ -317,3 +325,97 @@ class MongoDBRepository:
         except Exception as e:
             logger.error(f"获取唯一股票代码失败: {e}")
             return []
+    
+    def get_latest_stock_price_date(self):
+        """获取stock_daily_price表中的最新日期
+        
+        Returns:
+            date or None: 最新的股票价格日期，如果没有数据则返回None
+        """
+        if not self.client:
+            return None
+        
+        try:
+            # 按trade_date降序排序，取第一条记录
+            latest_doc = self.collection.find_one(
+                {},
+                {'trade_date': 1},
+                sort=[('trade_date', -1)]
+            )
+            
+            if latest_doc and 'trade_date' in latest_doc:
+                trade_date = latest_doc['trade_date']
+                # 处理datetime类型的trade_date
+                if hasattr(trade_date, 'date'):
+                    return trade_date.date()
+                # 兼容处理字符串类型的trade_date（用于旧数据）
+                try:
+                    return date.fromisoformat(trade_date)
+                except:
+                    pass
+            return None
+        except Exception as e:
+            logger.error(f"获取最新股票价格日期失败: {e}")
+            return None
+    
+    def get_all_stock_prices(self):
+        """获取stock_daily_price表的所有数据
+        
+        Returns:
+            list: 所有股票价格数据列表
+        """
+        if not self.client:
+            return []
+        
+        try:
+            # 查询所有数据
+            cursor = self.collection.find({}, {'_id': 0})
+            # 将数据转换为列表
+            result = []
+            for doc in cursor:
+                result.append(doc)
+            return result
+        except Exception as e:
+            logger.error(f"获取所有股票价格数据失败: {e}")
+            return []
+    
+    def update_sec_code_to_string(self):
+        """将stock_daily_price表的所有sec_code字段从int更新为str，并补0到6位
+        
+        Returns:
+            dict: 更新结果
+        """
+        if not self.client:
+            return {"success": False, "message": "MongoDB连接失败"}
+        
+        try:
+            # 获取所有数据
+            all_data = self.get_all_stock_prices()
+            if not all_data:
+                return {"success": False, "message": "没有数据需要更新"}
+            
+            updated_count = 0
+            for doc in all_data:
+                # 检查sec_code类型
+                if isinstance(doc.get('sec_code'), int):
+                    # 将int转换为6位字符串并补0
+                    new_sec_code = f"{doc['sec_code']:06d}"
+                    # 更新数据
+                    filter_criteria = {
+                        'sec_code': doc['sec_code'],
+                        'trade_date': doc['trade_date']
+                    }
+                    update_data = {
+                        '$set': {'sec_code': new_sec_code}
+                    }
+                    self.collection.update_one(filter_criteria, update_data)
+                    updated_count += 1
+            
+            return {
+                "success": True,
+                "message": f"成功更新 {updated_count} 条记录的sec_code字段",
+                "updated_count": updated_count
+            }
+        except Exception as e:
+            logger.error(f"更新sec_code字段失败: {e}")
+            return {"success": False, "message": f"更新失败: {str(e)}"}

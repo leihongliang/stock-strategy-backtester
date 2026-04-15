@@ -9,7 +9,7 @@ class StockDailyPrice(BaseModel):
     数据存储在数据库的stock_daily_price表/集合中。
     """
     trade_date: date  # 交易日期
-    sec_code: int     # 股票代码（数字格式，如600000）
+    sec_code: str     # 股票代码（字符串格式，如"600000"）
     open: int         # 开盘价（单位：分）
     high: int         # 最高价（单位：分）
     low: int          # 最低价（单位：分）
@@ -128,3 +128,24 @@ class StockPatternResponse(BaseModel):
     end_price: float        # 结束价格
     price_change: float     # 价格变动
     price_change_percent: float  # 价格变动百分比
+
+class UpdateStockRequest(BaseModel):
+    """更新单只股票数据的请求模型"""
+    stock_code: str      # 股票代码
+    start_date: str      # 开始日期
+    end_date: str        # 结束日期
+    data_source: str = "akshare"  # 数据源，可选值为"akshare"或"tushare"
+
+class SyncStockDataRequest(BaseModel):
+    """同步股票数据的请求模型"""
+    start_date: str          # 开始日期，格式为"YYYYMMDD"
+    end_date: str            # 结束日期，格式为"YYYYMMDD"
+    stock_codes: list[str] = None  # 股票代码列表，为None时同步所有股票
+    data_source: str = "akshare"  # 数据源，可选值为"akshare"或"tushare"
+
+class StrategyValidationRequest(BaseModel):
+    """策略验证请求模型"""
+    strategy_name: str = None      # 策略名称，目前支持 "strategy1"
+    start_date: str = None  # 开始日期，格式为"YYYY-MM-DD"
+    end_date: str = None    # 结束日期，格式为"YYYY-MM-DD"
+    stock_codes: list[str] = None  # 股票代码列表，为None时验证所有股票

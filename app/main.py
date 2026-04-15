@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.config.settings import settings
-from app.routes import stock_router
+from app.routes import update_router, strategy_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -9,7 +9,8 @@ app = FastAPI(
 )
 
 # 注册路由
-app.include_router(stock_router.router)
+app.include_router(update_router.router)
+app.include_router(strategy_router.router)
 
 @app.get("/")
 def read_root():

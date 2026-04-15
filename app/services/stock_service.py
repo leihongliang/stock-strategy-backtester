@@ -11,7 +11,7 @@ from app.services.data_sources.akshare_provider import AkShareProvider
 from app.services.data_sources.tushare_provider import TushareProvider
 from app.config.settings import settings
 from app.utils.log import logger
-
+from app.services.strategies import validate_strategy
 class StockService:
     """股票服务
     
@@ -98,8 +98,10 @@ class StockService:
                         data['change'] = data['收盘'] - data['pre_close']
                         data['pct_chg'] = (data['change'] / data['pre_close']) * 100
                         
-                        # 移除股票代码前缀，转换为数字
-                        sec_code = int(stock_code.replace('SH', '').replace('SZ', ''))
+                        # 移除股票代码前缀，保持为字符串
+                        sec_code = stock_code.replace('SH', '').replace('SZ', '')
+                        # 确保股票代码为6位字符串
+                        sec_code = sec_code.zfill(6)
                         
                         for _, row in data.iterrows():
                             # 将价格乘以100转换为整数
@@ -145,174 +147,17 @@ class StockService:
         except Exception as e:
             logger.error(f"批量获取股票日K线数据失败: {e}")
             return []
-    
-    def save_stock_data(self):
-        """获取所有A股近一年日K线数据并保存到MongoDB
 
-        从AkShare获取所有A股的近一年日K线数据，并保存到MongoDB的stock_daily_price集合中。
-        """
-        # 初始化数据库
-        if not self.repo.init_tables():
-            logger.error("数据库初始化失败，无法保存数据")
-            return False
-        
-        all_stocks = self.get_all_a_stocks()
-        logger.info(f"总共有 {len(all_stocks)} 只A股股票")
-        
-        # 计算日期范围（近一年）
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
-        
-        # 使用线程池并发获取数据，降低线程池大小以减少请求频率
-        max_workers = 5  # 线程池大小，从10减少到5
-        processed_count = 0
-        saved_count = 0
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有任务
-            futures = []
-            for index, stock in enumerate(all_stocks):
-                # 处理StockCompany对象
-                if hasattr(stock, 'sec_code'):
-                    # 格式化为6位数字代码
-                    stock_code = f"{stock.sec_code:06d}"
-                else:
-                    # 兼容旧格式
-                    stock_code = stock['代码']
-                futures.append(executor.submit(self.get_daily_k_data, stock_code, start_date, end_date))
-                # 每提交一个任务，增加等待时间，降低请求频率
-                time.sleep(0.5)
-            
-            # 处理完成的任务
-            for future in as_completed(futures):
-                stock_code, k_data = future.result()
-                processed_count += 1
-                
-                if k_data is not None:
-                    # 准备插入数据
-                    insert_data = []
-                    # 移除股票代码前缀，转换为数字
-                    sec_code = int(stock_code.replace('SH', '').replace('SZ', ''))
-                    
-                    # 检查数据源类型，使用不同的字段名
-                    is_tushare_data = 'ts_code' in k_data.columns
-                    
-                    if is_tushare_data:
-                        # 使用tushare的原始字段名
-                        for _, row in k_data.iterrows():
-                            # 将价格乘以100转换为整数
-                            open_price = int(float(row['open']) * 100)
-                            high_price = int(float(row['high']) * 100)
-                            low_price = int(float(row['low']) * 100)
-                            close_price = int(float(row['close']) * 100)
-                            
-                            # 昨收价、涨跌额和涨跌幅
-                            pre_close = int(float(row['pre_close']) * 100)
-                            change = int(float(row['change']) * 100)
-                            pct_chg = int(float(row['pct_chg']) * 100)  # 转换为0.01%
-                            
-                            # 成交量和成交额
-                            volume = int(row['vol'])
-                            amount = int(row['amount'])
-                            
-                            # 其他字段使用默认值
-                            adjfactor = 10000  # 默认调整因子
-                            st_status = 0  # 非ST
-                            trade_status = 1  # 正常交易
-                            
-                            # 创建StockDailyPrice对象
-                            stock_price = StockDailyPrice(
-                                trade_date=pd.to_datetime(row['trade_date']).date(),
-                                sec_code=sec_code,
-                                open=open_price,
-                                high=high_price,
-                                low=low_price,
-                                close=close_price,
-                                pre_close=pre_close,
-                                change=change,
-                                pct_chg=pct_chg,
-                                volume=volume,
-                                amount=amount,
-                                adjfactor=adjfactor,
-                                st_status=st_status,
-                                trade_status=trade_status
-                            )
-                            
-                            insert_data.append(stock_price)
-                    else:
-                        # 使用akshare的字段名
-                        # 计算昨收价、涨跌额和涨跌幅
-                        k_data['pre_close'] = k_data['收盘'].shift(1)
-                        k_data['pre_close'].fillna(k_data['开盘'].iloc[0], inplace=True)
-                        k_data['change'] = k_data['收盘'] - k_data['pre_close']
-                        k_data['pct_chg'] = (k_data['change'] / k_data['pre_close']) * 100
-                        
-                        for _, row in k_data.iterrows():
-                            # 将价格乘以100转换为整数
-                            open_price = int(float(row['开盘']) * 100)
-                            high_price = int(float(row['最高']) * 100)
-                            low_price = int(float(row['最低']) * 100)
-                            close_price = int(float(row['收盘']) * 100)
-                            
-                            # 计算昨收价、涨跌额和涨跌幅
-                            pre_close = int(float(row['pre_close']) * 100)
-                            change = int(float(row['change']) * 100)
-                            pct_chg = int(float(row['pct_chg']) * 100)  # 转换为0.01%
-                            
-                            # 成交量和成交额
-                            volume = int(row['成交量'])
-                            amount = int(row['成交额'])
-                            
-                            # 其他字段使用默认值
-                            adjfactor = 10000  # 默认调整因子
-                            st_status = 0  # 非ST
-                            trade_status = 1  # 正常交易
-                            
-                            # 创建StockDailyPrice对象
-                            stock_price = StockDailyPrice(
-                                trade_date=pd.to_datetime(row['日期']).date(),
-                                sec_code=sec_code,
-                                open=open_price,
-                                high=high_price,
-                                low=low_price,
-                                close=close_price,
-                                pre_close=pre_close,
-                                change=change,
-                                pct_chg=pct_chg,
-                                volume=volume,
-                                amount=amount,
-                                adjfactor=adjfactor,
-                                st_status=st_status,
-                                trade_status=trade_status
-                            )
-                            
-                            insert_data.append(stock_price)
-                    
-                    # 插入数据到MongoDB
-                    if insert_data:
-                        self.repo.save_stock_prices(insert_data)
-                        saved_count += 1
-                        # 每保存10只股票打印一次
-                        if saved_count % 10 == 0:
-                            print(f"已保存 {saved_count} 只股票的日K线数据")
-                            # 每保存10只股票后增加等待时间，降低请求频率
-                            time.sleep(5)
-            
-            # 每处理100只股票打印一次进度
-            if processed_count % 100 == 0:
-                # print(f"已处理 {processed_count} 只股票，已保存 {saved_count} 只股票的数据")
-                # 每处理100只股票后增加等待时间，降低请求频率
-                time.sleep(10)
-        
-        print(f"数据获取完成，共处理 {processed_count} 只股票，成功保存 {saved_count} 只股票的日K线数据")
-    
+
     def load_stock_data(self, stock_code):
         """从MongoDB加载股票数据
         
         从MongoDB的stock_daily_price集合中加载指定股票的数据。
         """
-        # 移除股票代码前缀，转换为数字
-        sec_code = int(stock_code.replace('SH', '').replace('SZ', ''))
+        # 移除股票代码前缀，保持为字符串
+        sec_code = stock_code.replace('SH', '').replace('SZ', '')
+        # 确保股票代码为6位字符串
+        sec_code = sec_code.zfill(6)
         
         # 从数据库获取数据
         result = self.repo.get_stock_prices(sec_code)
@@ -333,188 +178,73 @@ class StockService:
         k_data['日期'] = pd.to_datetime(k_data['日期'])
         
         return k_data
-    
-    def generate_trend_pattern(self, k_data, start_index, weeks):
-        """根据周K线数据生成涨跌模式字符串
-        
-        根据股票的周K线数据，生成指定长度的涨跌模式字符串。
-        """
-        if k_data is None or len(k_data) < start_index + weeks:
-            return ""
-        
-        trend_pattern = ""
-        for i in range(start_index, start_index + weeks):
-            if k_data.iloc[i]['收盘'] > k_data.iloc[i]['开盘']:
-                trend_pattern += "1"  # 涨
-            else:
-                trend_pattern += "0"  # 跌
-        
-        return trend_pattern
-    
-    def find_stocks_by_pattern(self, pattern, start_date=None, end_date=None):
-        """根据涨跌模式查找匹配的股票
-        
-        根据用户输入的涨跌模式，在指定时间范围内查找匹配的股票。
-        """
-        all_stocks = self.get_all_a_stocks()
-        logger.info(f"总共有 {len(all_stocks)} 只A股股票")
-        
-        matching_stocks = []
-        
-        # 遍历所有股票
-        for index, stock in enumerate(all_stocks):
-            # 处理StockCompany对象
-            if hasattr(stock, 'sec_code'):
-                # 格式化为6位数字代码
-                stock_code = f"{stock.sec_code:06d}"
-                stock_name = stock.sec_name
-                market = stock.market
-            else:
-                # 兼容旧格式
-                stock_code = stock['代码']
-                stock_name = stock['名称']
-                market = stock['市场']
-            
-            # 从MongoDB加载数据
-            k_data = self.load_stock_data(stock_code)
-            
-            if k_data is not None:
-                # 筛选时间范围内的数据
-                if start_date and end_date:
-                    start_date_dt = pd.to_datetime(start_date)
-                    end_date_dt = pd.to_datetime(end_date)
-                    filtered_data = k_data[(k_data['日期'] >= start_date_dt) & (k_data['日期'] <= end_date_dt)]
-                else:
-                    filtered_data = k_data
-                
-                # 检查是否有足够的数据
-                if len(filtered_data) >= len(pattern):
-                    # 遍历所有可能的连续n周组合
-                    for i in range(len(filtered_data) - len(pattern) + 1):
-                        # 生成涨跌模式
-                        trend_pattern = self.generate_trend_pattern(filtered_data, i, len(pattern))
-                        
-                        # 检查是否匹配
-                        if trend_pattern == pattern:
-                            # 获取匹配的时间段
-                            match_start_date = filtered_data.iloc[i]['日期'].strftime('%Y-%m-%d')
-                            match_end_date = filtered_data.iloc[i + len(pattern) - 1]['日期'].strftime('%Y-%m-%d')
-                            
-                            # 获取股价信息
-                            start_price = filtered_data.iloc[i]['开盘']
-                            end_price = filtered_data.iloc[i + len(pattern) - 1]['收盘']
-                            price_change = end_price - start_price
-                            price_change_percent = (price_change / start_price) * 100
-                            
-                            matching_stocks.append({
-                                'code': stock_code,
-                                'name': stock_name,
-                                'market': market,
-                                'pattern': trend_pattern,
-                                'period': f"{match_start_date} 至 {match_end_date}",
-                                'start_price': start_price,
-                                'end_price': end_price,
-                                'price_change': price_change,
-                                'price_change_percent': price_change_percent
-                            })
-                            # 找到一个匹配后就停止当前股票的搜索
-                            break
-            
-            # 每处理100只股票打印一次进度
-            if (index + 1) % 100 == 0:
-                logger.info(f"已处理 {index + 1} 只股票，找到 {len(matching_stocks)} 只匹配的股票")
-        
-        return matching_stocks
-    
-    def update_single_stock_data(self, stock_code, start_date, end_date, data_source="akshare"):
-        """更新单只股票的日K线数据
 
-        从指定数据源获取指定股票的日K线数据，并保存到MongoDB的stock_daily_price集合中。
-
-        Args:
-            stock_code: 股票代码
-            start_date: 开始日期，格式为"YYYYMMDD"
-            end_date: 结束日期，格式为"YYYYMMDD"
-            data_source: 数据源，可选值为"akshare"或"tushare"
-
-        Returns:
-            bool: 是否更新成功
-        """
-        # 初始化数据库
-        if not self.repo.init_tables():
-            print("数据库初始化失败，无法保存数据")
-            return False
-        
-        # 获取股票数据
-        k_data = self.get_daily_k_data(stock_code, start_date, end_date, data_source)
-        
-        if k_data is not None:
-            self.repo.save_stock_prices(k_data)
-            print(f"成功从{data_source}更新股票 {stock_code} 的日K线数据，共 {len(k_data)} 条记录")
-            return True
-        else:
-            print(f"从{data_source}获取股票 {stock_code} 的日K线数据失败")
-            return False
-    
-    def check_data_exists(self):
-        """检查数据是否存在
-        
-        检查MongoDB的stock_daily_price集合中是否有数据。
-        """
-        return self.repo.get_stock_count() > 0
-    
-    def get_hsgt_stocks(self, trade_date):
-        """获取沪港通/深港通股票列表
-        
-        从Tushare获取指定日期的沪港通/深港通股票列表。
-        
-        Args:
-            trade_date: 交易日期，格式为"YYYYMMDD"
-            
-        Returns:
-            list: 沪港通/深港通股票列表
-        """
-        from app.services.data_sources.tushare_provider import TushareProvider
-        
-        try:
-            df = TushareProvider.get_hsgt_stocks(trade_date)
-            if df is not None:
-                # 转换为字典列表
-                result = df.to_dict('records')
-                return result
-            else:
-                return []
-        except Exception as e:
-            logger.error(f"获取沪港通/深港通股票列表失败: {e}")
-            return []
-    
     def save_stock_companies(self):
-        """获取所有A股公司信息并保存到数据库
+        """获取当天A股公司信息并保存到数据库
         
-        从AkShare获取所有A股公司的基本信息，包括股票代码、名称、市场、行业和上市日期，
-        并保存到数据库的stock_company集合中。
+        从数据库读取所有A股公司的基本信息，然后进行全量更新，
+        保存到数据库的stock_company集合中。
+        如果数据库中没有数据，则从外部数据源获取并保存。
         """
-        # 初始化数据库
-        if not self.repo.init_tables():
-            logger.error("数据库初始化失败，无法保存数据")
-            return False
         
-        # 获取所有A股股票列表
-        all_stocks = self.get_all_a_stocks()
-        logger.info(f"总共有 {len(all_stocks)} 只A股股票")
+        # 从数据库获取所有A股公司信息
+        all_stocks = self.get_stock_companies_from_db()
+        logger.info(f"从数据库获取到 {len(all_stocks)} 只A股股票")
         
-        # 保存公司数据到数据库
+        # 保存公司数据到数据库（全量更新）
         if all_stocks:
-            success = self.repo.save_stock_companies(all_stocks)
-            if success:
-                logger.info(f"成功保存 {len(all_stocks)} 家A股公司信息")
-                return True
+            # 转换为StockCompany对象列表
+            stock_company_objects = []
+            for stock in all_stocks:
+                # 处理字典类型的数据
+                if isinstance(stock, dict):
+                    # 确保日期格式正确
+                    listing_date = stock.get('listing_date')
+                    if isinstance(listing_date, str):
+                        listing_date = pd.to_datetime(listing_date).date()
+                    elif isinstance(listing_date, datetime):
+                        listing_date = listing_date.date()
+                
+                    # 创建StockCompany对象
+                    stock_company = StockCompany(
+                        sec_code=str(stock.get('sec_code')),
+                        sec_name=stock.get('sec_name'),
+                        market=stock.get('market'),
+                        industry=stock.get('industry'),
+                        listing_date=listing_date
+                    )
+                    stock_company_objects.append(stock_company)
+            
+            # 保存到数据库
+            if stock_company_objects:
+                success = self.repo.save_stock_companies(stock_company_objects)
+                if success:
+                    logger.info(f"成功更新 {len(stock_company_objects)} 家A股公司信息")
+                    return True
+                else:
+                    logger.error("保存A股公司信息失败")
+                    return False
             else:
-                logger.error("保存A股公司信息失败")
+                logger.error("没有有效的公司信息可以更新")
                 return False
         else:
-            logger.error("没有获取到A股公司信息")
-            return False
+            # 第一次写入场景，从外部数据源获取数据
+            logger.info("数据库中暂无A股公司信息，从外部数据源获取")
+            all_stocks = self.get_all_a_stocks()
+            logger.info(f"从外部数据源获取到 {len(all_stocks)} 只A股股票")
+            
+            # 保存到数据库
+            if all_stocks:
+                success = self.repo.save_stock_companies(all_stocks)
+                if success:
+                    logger.info(f"成功保存 {len(all_stocks)} 家A股公司信息（第一次写入）")
+                    return True
+                else:
+                    logger.error("保存A股公司信息失败")
+                    return False
+            else:
+                logger.error("从外部数据源获取A股公司信息失败")
+                return False
     
     def get_stock_companies_from_db(self):
         """从数据库获取所有A股公司信息
@@ -571,11 +301,7 @@ class StockService:
         Returns:
             dict: 同步结果
         """
-        # 初始化数据库
-        if not self.repo.init_tables():
-            logger.error("数据库初始化失败，无法保存数据")
-            return {"message": "数据库初始化失败", "success": False}
-        
+
         # 从数据库获取股票列表
         stock_companies = self.get_stock_companies_from_db()
         if not stock_companies:
@@ -589,14 +315,16 @@ class StockService:
                 # 从字典中获取股票代码
                 if 'sec_code' in company:
                     stock_code = str(company['sec_code'])
-                    # 格式化为6位数字代码
-                    stock_code = f"{int(stock_code):06d}"
+                    # 确保股票代码为6位字符串
+                    stock_code = stock_code.zfill(6)
                     if stock_codes is None or stock_code in stock_codes:
                         stocks_to_sync.append(stock_code)
             else:
                 # 处理对象类型
                 if hasattr(company, 'sec_code'):
-                    stock_code = f"{company.sec_code:06d}"
+                    stock_code = str(company.sec_code)
+                    # 确保股票代码为6位字符串
+                    stock_code = stock_code.zfill(6)
                     if stock_codes is None or stock_code in stock_codes:
                         stocks_to_sync.append(stock_code)
         
@@ -625,7 +353,14 @@ class StockService:
         # 过滤出指定范围内的交易日
         trading_days = []
         for item in trade_calendar_data:
-            trade_date = date.fromisoformat(item['trade_date'])
+            trade_date = item['trade_date']
+            # 处理datetime类型的trade_date
+            if hasattr(trade_date, 'date'):
+                trade_date = trade_date.date()
+            # 兼容处理字符串类型的trade_date（用于旧数据）
+            elif isinstance(trade_date, str):
+                trade_date = date.fromisoformat(trade_date)
+            
             if (trade_date >= start_date_obj and 
                 trade_date <= end_date_obj and 
                 item['is_trading_day']):
@@ -721,34 +456,35 @@ class StockService:
             "total_records": total_records
         }
     
-    def sync_trade_calendar(self):
+    def sync_trade_calendar(self, start_date=None, end_date=None):
         """同步交易日历数据到数据库
         
         从AkShare获取A股交易日历数据，并保存到数据库。
-        按5年分段获取数据，确保覆盖1990-12-19到当天的范围，并补充1992-05-04为交易日。
         只同步数据库中不存在的新数据。
+        
+        Args:
+            start_date (date, optional): 开始日期. Defaults to None (akshare单次最多获取5年 默认使用2023-01-01).
+            end_date (date, optional): 结束日期. Defaults to None (使用当天日期).
         
         Returns:
             dict: 同步结果
         """
-        # 初始化数据库
-        if not self.repo.init_tables():
-            logger.error("数据库初始化失败，无法保存数据")
-            return {"message": "数据库初始化失败", "success": False}
-        
+
         try:
             logger.info("开始从AkShare获取交易日历数据")
             
             # 获取数据库中最新的交易日日期
             latest_db_date = self.repo.get_latest_trade_date()
+            default_start_date = date(2023, 1, 1)
+
+            # 定义日期范围
+            if start_date is None:
+                start_date = default_start_date
+            if end_date is None:
+                end_date = date.today()  # 使用当天日期作为结束日期
             
-            # 定义日期范围和分段
-            start_date = date(1990, 12, 19)
-            end_date = date.today()  # 使用当天日期作为结束日期
-            segment_years = 5
-            
-            # 如果数据库已有数据，则从最新日期的下一天开始
-            if latest_db_date:
+            # 如果数据库已有数据且用户未指定开始日期，则从最新日期的下一天开始
+            if latest_db_date and end_date > latest_db_date:
                 logger.info(f"数据库中最新的交易日日期: {latest_db_date}")
                 start_date = latest_db_date + timedelta(days=1)
                 if start_date > end_date:
@@ -760,17 +496,7 @@ class StockService:
                         "latest_date": latest_db_date.isoformat()
                     }
             else:
-                logger.info("数据库中没有交易日历数据，将同步完整数据")
-            
-            # 生成5年分段
-            segments = []
-            current_start = start_date
-            while current_start <= end_date:
-                current_end = date(min(current_start.year + segment_years - 1, end_date.year), 12, 31)
-                if current_end > end_date:
-                    current_end = end_date
-                segments.append((current_start, current_end))
-                current_start = date(current_start.year + segment_years, 1, 1)
+                logger.info("数据库中没有交易日历数据或用户指定了开始日期，将同步指定范围的数据")
             
             # 存储所有数据
             all_trade_dates = set()
@@ -784,45 +510,21 @@ class StockService:
             tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date']).dt.date
             
             # 过滤出需要同步的新数据
-            new_data_df = tool_trade_date_hist_sina_df[tool_trade_date_hist_sina_df['trade_date'] >= start_date]
+            new_data_df = tool_trade_date_hist_sina_df[(tool_trade_date_hist_sina_df['trade_date'] >= start_date) & (tool_trade_date_hist_sina_df['trade_date'] <= end_date)]
             logger.info(f"需要同步的新数据: {len(new_data_df)} 条记录")
             
-            # 分段处理数据
-            for i, (segment_start, segment_end) in enumerate(segments):
-                logger.info(f"处理第 {i+1}/{len(segments)} 段数据: {segment_start} 至 {segment_end}")
+            # 直接处理所有数据
+            for _, row in new_data_df.iterrows():
+                trade_date = row['trade_date']
+                all_trade_dates.add(trade_date)
+                is_trading_day = bool(row['is_trading_day']) if 'is_trading_day' in row else True
                 
-                # 过滤当前分段的数据
-                segment_df = new_data_df[(new_data_df['trade_date'] >= segment_start) & (new_data_df['trade_date'] <= segment_end)]
-                
-                logger.info(f"第 {i+1} 段处理成功，共 {len(segment_df)} 条记录")
-                
-                # 处理数据
-                for _, row in segment_df.iterrows():
-                    trade_date = row['trade_date']
-                    all_trade_dates.add(trade_date)
-                    is_trading_day = bool(row['is_trading_day']) if 'is_trading_day' in row else True
-                    
-                    trade_calendar = TradeCalendar(
-                        trade_date=trade_date,
-                        is_trading_day=is_trading_day
-                    )
-                    trade_calendar_list.append(trade_calendar)
-            
-            # 补充1992-05-04为交易日（如果在同步范围内）
-            special_date = date(1992, 5, 4)
-            if special_date >= start_date and special_date not in all_trade_dates:
-                logger.info(f"补充 {special_date} 为交易日")
                 trade_calendar = TradeCalendar(
-                    trade_date=special_date,
-                    is_trading_day=True
+                    trade_date=trade_date,
+                    is_trading_day=is_trading_day
                 )
                 trade_calendar_list.append(trade_calendar)
-                all_trade_dates.add(special_date)
-            elif special_date < start_date:
-                logger.info(f"{special_date} 不在同步范围内，跳过")
-            else:
-                logger.info(f"{special_date} 已经是交易日")
-            
+
             # 保存到数据库
             if trade_calendar_list:
                 success = self.repo.save_trade_calendar(trade_calendar_list)
@@ -832,7 +534,6 @@ class StockService:
                         "message": f"成功同步 {len(trade_calendar_list)} 条交易日历数据，覆盖{start_date}到{end_date}范围",
                         "success": True,
                         "count": len(trade_calendar_list),
-                        "segments": len(segments),
                         "start_date": start_date.isoformat(),
                         "end_date": end_date.isoformat()
                     }
@@ -864,7 +565,7 @@ class StockService:
         Returns:
             dict: 包含符合条件的股票列表和策略正确率的结果
         """
-        from app.services.strategies import validate_strategy
+
         return validate_strategy(self, strategy_name, start_date, end_date)
     
     def daily_update(self):
@@ -893,12 +594,17 @@ class StockService:
             
             # 3. 更新日K线到最新的一天
             logger.info("开始更新日K线数据...")
-            # 计算日期范围（最近10天）
-            from datetime import datetime, timedelta
+            # 从数据库获取stock_daily_price的最晚日期作为开始日期
+            latest_price_date = self.repo.get_latest_stock_price_date()
+            if latest_price_date:
+                # 使用数据库中最新的股票价格日期作为开始日期
+                start_date = latest_price_date.strftime("%Y%m%d")
+                logger.info(f"从数据库最新的股票价格日期 {start_date} 开始更新日K线数据")
+            # 使用当天作为结束日期
             end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
+            logger.info(f"使用当天日期 {end_date} 作为结束日期")
             
-            # 同步最近10天的股票数据
+            # 同步指定范围的股票数据
             kline_result = self.sync_stock_data_in_range(start_date, end_date, data_source="tushare")
             results['kline_update'] = kline_result
             

@@ -15,9 +15,15 @@ class TradeCalendar(BaseModel):
         """转换为MongoDB文档格式
         
         Returns:
-            dict: MongoDB文档格式的字典
+            dict: MongoDB文档格式的字典，trade_date使用datetime类型
         """
+        from datetime import datetime
+        trade_dt = datetime(
+            self.trade_date.year,
+            self.trade_date.month,
+            self.trade_date.day
+        )
         return {
-            'trade_date': self.trade_date.isoformat(),
+            'trade_date': trade_dt,
             'is_trading_day': self.is_trading_day
         }
