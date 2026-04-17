@@ -147,7 +147,7 @@ class StockService:
             return []
 
 
-    def load_stock_data(self, stock_code):
+    def load_stock_data(self, stock_code: str) -> pd.DataFrame | None:
         """从MongoDB加载股票数据
         
         从MongoDB的stock_daily_price集合中加载指定股票的数据。
@@ -173,7 +173,21 @@ class StockService:
         k_data['close'] = k_data['close'] / 100
 
         k_data['date'] = pd.to_datetime(k_data['date'])
-        
+        k_data = k_data.sort_values('date').reset_index(drop=True)
+
+        k_data['pct_change'] = k_data['close'].pct_change() * 100
+        k_data['price_change'] = k_data['close'].diff()
+        k_data['volume_change'] = k_data['volume'].pct_change()
+        k_data['intraday_change'] = (k_data['close'] - k_data['open']) / k_data['open'] * 100
+
+        k_data['is_red'] = k_data['close'] > k_data['open']
+        k_data['is_green'] = k_data['close'] < k_data['open']
+        k_data['is_doji'] = k_data['close'] == k_data['open']
+
+        k_data['ma5'] = k_data['close'].rolling(window=5).mean()
+        k_data['ma10'] = k_data['close'].rolling(window=10).mean()
+        k_data['ma20'] = k_data['close'].rolling(window=20).mean()
+
         return k_data
 
     def save_stock_companies(self):

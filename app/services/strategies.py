@@ -420,9 +420,8 @@ def strategy2(filtered_data, stock_code, stock_name, market):
     
     # 检查是否有足够的数据
     if len(filtered_data) >= 20:
-        # 计算移动平均线
-        filtered_data['MA5'] = filtered_data['close'].rolling(window=5).mean()
-        filtered_data['MA20'] = filtered_data['close'].rolling(window=20).mean()
+        filtered_data['MA5'] = filtered_data['ma5']
+        filtered_data['MA20'] = filtered_data['ma20']
         
         # 遍历数据查找金叉
         for i in range(1, len(filtered_data)):
@@ -508,108 +507,72 @@ def strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days
     total_cases = 0
     successful_cases = 0
     
-    # 检查是否有足够的数据
-    required_days = consecutive_days + 1 + verification_days  # 连续上涨天数 + 1根异常放量阳线 + 验证天数
-    if len(filtered_data) >= required_days:
-        # 遍历所有可能的连续组合
-        for i in range(len(filtered_data) - required_days + 1):
-            # 检查连续阳线条件（至少consecutive_days天，允许一根小阴线）
-            consecutive_up_days = 0
-            has_small_red = False
-            valid_up_trend = True
+    df = filtered_data.copy()
+    required_days = consecutive_days + 1 + verification_days
+    
+    if len(df) >= required_days:
+        # is_small_green: 当日是否为"小阴线"，需同时满足以下条件：
+        #   1. is_green: 当日为阴线（收盘价 < 开盘价）
+        #   2. df['intraday_change'] >= -1: 当日跌幅不超过1%（跌幅较小）
+        #   3. df['intraday_change'] < 0: 当日为下跌（确保是阴线方向）
+        #   4. df['close'] > df['close'].shift(1): 当日收盘价仍高于前一日收盘价（整体趋势向上）
+        is_small_green = df['is_green'] & (df['intraday_change'] >= -1) & (df['intraday_change'] < 0) & (df['close'] > df['close'].shift(1))
+        
+        # is_bullish: 当日是否为大阳线，条件为当日涨幅 >= 3%
+        is_bullish = df['intraday_change'] >= 3
+        
+        # is_heavy_volume: 当日是否为放量，条件为当日成交量 >= 前一日成交量的2倍
+        is_heavy_volume = df['volume'] >= df['volume'].shift(1) * 2
+        
+        for i in range(len(df) - required_days + 1):
+            window = df.iloc[i:i + consecutive_days]
+            red_count = window['is_red'].sum()
+            small_green_count = window[is_small_green.iloc[i:i + consecutive_days]].shape[0]
             
-            for j in range(i, i + consecutive_days):
-                if j >= len(filtered_data):
-                    valid_up_trend = False
-                    break
-                
-                # 计算每日涨跌
-                if filtered_data.iloc[j]['close'] > filtered_data.iloc[j]['open']:
-                    consecutive_up_days += 1
-                else:
-                    close = filtered_data.iloc[j]['close']
-                    open_price = filtered_data.iloc[j]['open']
-                    pre_close = filtered_data.iloc[j-1]['close'] if j > i else open_price
+            if red_count >= consecutive_days or (red_count >= consecutive_days - 1 and small_green_count == 1):
+                abnormal_idx = i + consecutive_days
+                if abnormal_idx < len(df):
+                    abnormal_day = df.iloc[abnormal_idx]
+                    prev_day = df.iloc[abnormal_idx - 1]
                     
-                    # 小阴线定义: 跌幅不超过1%，且收盘价仍高于前一天收盘价
-                    if (open_price - close) / open_price <= 0.01 and close > pre_close:
-                        has_small_red = True
-                    else:
-                        valid_up_trend = False
-                        break
-            
-            if valid_up_trend and (consecutive_up_days >= consecutive_days or (consecutive_up_days >= consecutive_days - 1 and has_small_red)):
-                # 检查第consecutive_days+1天是否为放量阳线
-                abnormal_up_day_index = i + consecutive_days
-                if abnormal_up_day_index < len(filtered_data):
-                    abnormal_up_day = filtered_data.iloc[abnormal_up_day_index]
-                    previous_day = filtered_data.iloc[abnormal_up_day_index - 1]
-                    
-                    # 检查是否为大阳线（涨幅≥3%）
-                    if (abnormal_up_day['close'] - abnormal_up_day['open']) / abnormal_up_day['open'] >= 0.03:
-                        if abnormal_up_day['high'] > abnormal_up_day['close'] and (abnormal_up_day['high'] - abnormal_up_day['close']) / abnormal_up_day['open'] >= 0.01:
-                            if abnormal_up_day['volume'] >= previous_day['volume'] * 2:
-                                # 验证接下来的verification_days天
-                                valid_verification = True
-                                abnormal_up_day_open = abnormal_up_day['open']
-                                
-                                for j in range(1, verification_days + 1):
-                                    verification_index = abnormal_up_day_index + j
-                                    if verification_index >= len(filtered_data):
-                                        valid_verification = False
-                                        break
-                                    
-                                    # 检查是否跌破异常放量阳线的开盘价
-                                    if filtered_data.iloc[verification_index]['low'] < abnormal_up_day_open:
-                                        valid_verification = False
-                                        break
-                                
-                                # 计算verification_days天涨幅
-                                if abnormal_up_day_index + verification_days < len(filtered_data):
-                                    verification_end_day = filtered_data.iloc[abnormal_up_day_index + verification_days]
-                                    increase = (verification_end_day['close'] - abnormal_up_day['close']) / abnormal_up_day['close'] * 100
-                                else:
-                                    increase = None
-                                    valid_verification = False
-                                
-                                # 计算5日、10日、20日涨幅
-                                five_day_increase = None
-                                ten_day_increase = None
-                                twenty_day_increase = None
-                                
-                                if abnormal_up_day_index + 4 < len(filtered_data):
-                                    five_day_end = filtered_data.iloc[abnormal_up_day_index + 4]
-                                    five_day_increase = (five_day_end['close'] - abnormal_up_day['open']) / abnormal_up_day['open'] * 100
-        
-                                if abnormal_up_day_index + 9 < len(filtered_data):
-                                    ten_day_end = filtered_data.iloc[abnormal_up_day_index + 9]
-                                    ten_day_increase = (ten_day_end['close'] - abnormal_up_day['open']) / abnormal_up_day['open'] * 100
-        
-                                if abnormal_up_day_index + 19 < len(filtered_data):
-                                    twenty_day_end = filtered_data.iloc[abnormal_up_day_index + 19]
-                                    twenty_day_increase = (twenty_day_end['close'] - abnormal_up_day['open']) / abnormal_up_day['open'] * 100
-        
-                                total_cases += 1
-                                if valid_verification:
-                                    successful_cases += 1
-        
-                                match_start_date = filtered_data.iloc[i]['date'].strftime('%Y-%m-%d')
-                                match_end_date = abnormal_up_day['date'].strftime('%Y-%m-%d')
-                                
-                                matches.append({
-                                    'code': stock_code,
-                                    'name': stock_name,
-                                    'market': market,
-                                    'period': f"{match_start_date} 至 {match_end_date}",
-                                    'abnormal_up_day_date': abnormal_up_day['date'].strftime('%Y-%m-%d'),
-                                    'abnormal_up_day_open': abnormal_up_day['open'],
-                                    'abnormal_up_day_close': abnormal_up_day['close'],
-                                    f'{verification_days}_day_verification_result': '成功' if valid_verification else '失败',
-                                    f'{verification_days}_day_increase': increase,
-                                    '5_day_increase': five_day_increase,
-                                    '10_day_increase': ten_day_increase,
-                                    '20_day_increase': twenty_day_increase
-                                })
+                    # 异动日条件判断，使用预计算的布尔序列：
+                    # 1. is_bullish.iloc[abnormal_idx]: 异动日涨幅 >= 3%（大阳线）
+                    # 2. abnormal_day['high'] > abnormal_day['close']: 存在上影线（冲高回落）
+                    # 3. (abnormal_day['high'] - abnormal_day['close']) / abnormal_day['open'] * 100 >= 1: 上影线长度 >= 1%
+                    # 4. is_heavy_volume.iloc[abnormal_idx]: 异动日成交量 >= 前一日成交量的2倍（放量）
+                    if (is_bullish.iloc[abnormal_idx] and
+                        abnormal_day['high'] > abnormal_day['close'] and
+                        (abnormal_day['high'] - abnormal_day['close']) / abnormal_day['open'] * 100 >= 1 and
+                        is_heavy_volume.iloc[abnormal_idx]):
+                        
+                        verification_range = df.iloc[abnormal_idx + 1:abnormal_idx + verification_days + 1]
+                        valid_verification = (verification_range['low'] >= abnormal_day['open']).all()
+                        
+                        end_idx = abnormal_idx + verification_days
+                        if end_idx < len(df):
+                            increase = (df.iloc[end_idx]['close'] - abnormal_day['close']) / abnormal_day['close'] * 100
+                        else:
+                            increase = None
+                            valid_verification = False
+                        
+                        total_cases += 1
+                        if valid_verification:
+                            successful_cases += 1
+                        
+                        matches.append({
+                            'code': stock_code,
+                            'name': stock_name,
+                            'market': market,
+                            'period': f"{df.iloc[i]['date'].strftime('%Y-%m-%d')} 至 {abnormal_day['date'].strftime('%Y-%m-%d')}",
+                            'abnormal_up_day_date': abnormal_day['date'].strftime('%Y-%m-%d'),
+                            'abnormal_up_day_open': abnormal_day['open'],
+                            'abnormal_up_day_close': abnormal_day['close'],
+                            f'{verification_days}_day_verification_result': '成功' if valid_verification else '失败',
+                            f'{verification_days}_day_increase': increase,
+                            '5_day_increase': (df.iloc[abnormal_idx + 4]['close'] - abnormal_day['open']) / abnormal_day['open'] * 100 if abnormal_idx + 4 < len(df) else None,
+                            '10_day_increase': (df.iloc[abnormal_idx + 9]['close'] - abnormal_day['open']) / abnormal_day['open'] * 100 if abnormal_idx + 9 < len(df) else None,
+                            '20_day_increase': (df.iloc[abnormal_idx + 19]['close'] - abnormal_day['open']) / abnormal_day['open'] * 100 if abnormal_idx + 19 < len(df) else None
+                        })
     
     return {
         'matches': matches,
