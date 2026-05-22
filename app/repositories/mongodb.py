@@ -53,16 +53,20 @@ class MongoDBRepository:
     
     def save_stock_prices(self, stock_price_data: list[StockDailyPrice]):
         """保存股票价格数据到MongoDB
-        
+
         Args:
             stock_price_data: StockDailyPrice对象的列表
         """
         if not self.client or not stock_price_data:
+            logger.warning(f"保存股票数据跳过: client={self.client is not None}, data_count={len(stock_price_data) if stock_price_data else 0}")
             return False
-        
+
         try:
+            logger.info(f"开始保存 {len(stock_price_data)} 条股票数据到MongoDB")
+            saved_count = 0
+
             # 为每个文档添加唯一标识并执行upsert操作
-            for item in stock_price_data:
+            for i, item in enumerate(stock_price_data):
                 doc = item.to_mongo_doc()
                 # 以(sec_code, trade_date)组合作为唯一标识
                 filter_criteria = {
@@ -71,6 +75,13 @@ class MongoDBRepository:
                 }
                 # 使用replace_one实现upsert，存在则更新，不存在则插入
                 self.collection.replace_one(filter_criteria, doc, upsert=True)
+                saved_count += 1
+
+                # 每100条记录打印进度
+                if saved_count % 100 == 0:
+                    logger.info(f"已保存 {saved_count}/{len(stock_price_data)} 条记录")
+
+            logger.info(f"成功保存 {saved_count} 条股票数据到MongoDB")
             return True
         except Exception as e:
             logger.error(f"保存股票数据失败: {e}")
@@ -129,8 +140,9 @@ class MongoDBRepository:
                     # 如果是字符串，尝试转换为datetime对象
                     try:
                         trade_date = datetime.fromisoformat(trade_date)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.error(f"股票 {sec_code} 的日期格式转换失败: trade_date={trade_date}, 错误: {e}")
+                        continue
                 result.append((trade_date, doc['open'], doc['high'], doc['low'], doc['close'], doc['volume'], doc['amount']))
             
             # 按日期排序

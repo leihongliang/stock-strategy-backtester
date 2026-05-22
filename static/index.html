@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K 线图 - Stock Viewer</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { overflow: hidden; height: 100vh; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #131722; color: #d1d4dc; display: flex; flex-direction: column; }
+
+        /* 工具栏 */
+        .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #1e222d; border-bottom: 1px solid #2a2e39; flex-shrink: 0; }
+        .search-box { position: relative; }
+        .search-input { width: 240px; padding: 6px 10px; background: #2a2e39; border: 1px solid #363a45; border-radius: 4px; color: #d1d4dc; font-size: 13px; outline: none; }
+        .search-input:focus { border-color: #2962ff; }
+        .search-input::placeholder { color: #6b7280; }
+        .search-dropdown { position: absolute; top: 100%; left: 0; width: 320px; max-height: 300px; overflow-y: auto; background: #1e222d; border: 1px solid #363a45; border-radius: 4px; z-index: 100; display: none; margin-top: 2px; }
+        .search-dropdown.visible { display: block; }
+        .search-item { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; font-size: 13px; }
+        .search-item:hover { background: #2a2e39; }
+        .search-item .code { color: #2962ff; font-weight: 500; }
+        .search-item .name { color: #d1d4dc; }
+
+        .date-input { padding: 6px 10px; background: #2a2e39; border: 1px solid #363a45; border-radius: 4px; color: #d1d4dc; font-size: 13px; outline: none; width: 130px; }
+        .date-input:focus { border-color: #2962ff; }
+        .date-label { color: #787b86; font-size: 12px; }
+
+        .time-btn { padding: 5px 10px; background: #2a2e39; border: 1px solid #363a45; border-radius: 3px; color: #787b86; font-size: 12px; cursor: pointer; }
+        .time-btn:hover { background: #363a45; color: #d1d4dc; }
+        .time-btn.active { background: #2962ff; border-color: #2962ff; color: #fff; }
+
+        .stock-info { margin-left: auto; font-size: 13px; color: #787b86; }
+        .stock-info .stock-name { color: #d1d4dc; font-weight: 500; margin-right: 8px; }
+
+        /* 信息栏 */
+        .info-bar { display: flex; align-items: center; gap: 16px; padding: 6px 16px; background: #1e222d; border-bottom: 1px solid #2a2e39; font-size: 12px; flex-shrink: 0; min-height: 30px; }
+        .info-item { display: flex; gap: 4px; }
+        .info-item .label { color: #787b86; }
+        .info-item .value { font-weight: 500; }
+        .info-item .value.up { color: #ef5350; }
+        .info-item .value.down { color: #26a69a; }
+
+        /* 图表区域 */
+        .chart-container { flex: 1; position: relative; }
+        #chart { width: 100%; height: 100%; }
+
+        /* MA 图例 */
+        .ma-legend { display: flex; gap: 16px; padding: 4px 16px; font-size: 12px; flex-shrink: 0; background: #131722; }
+        .ma-legend .ma-item { display: flex; gap: 4px; cursor: pointer; opacity: 0.6; }
+        .ma-legend .ma-item.active { opacity: 1; }
+        .ma-legend .ma-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        /* 加载提示 */
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #787b86; font-size: 14px; display: none; }
+        .loading.visible { display: block; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="search-box">
+            <input class="search-input" id="searchInput" type="text" placeholder="输入股票代码或名称搜索..." autocomplete="off">
+            <div class="search-dropdown" id="searchDropdown"></div>
+        </div>
+
+        <span class="date-label">从</span>
+        <input class="date-input" id="startDate" type="date">
+        <span class="date-label">到</span>
+        <input class="date-input" id="endDate" type="date">
+
+        <button class="time-btn" data-range="1m">1月</button>
+        <button class="time-btn" data-range="3m">3月</button>
+        <button class="time-btn active" data-range="6m">6月</button>
+        <button class="time-btn" data-range="1y">1年</button>
+        <button class="time-btn" data-range="all">全部</button>
+
+        <div class="stock-info" id="stockInfo">请输入股票代码或名称搜索</div>
+    </div>
+
+    <div class="ma-legend" id="maLegend">
+        <span class="ma-item active" data-ma="ma5"><span class="ma-dot" style="background:#f0b90b"></span><span>MA5</span></span>
+        <span class="ma-item active" data-ma="ma10"><span class="ma-dot" style="background:#2962ff"></span><span>MA10</span></span>
+        <span class="ma-item active" data-ma="ma20"><span class="ma-dot" style="background:#e91e63"></span><span>MA20</span></span>
+        <span class="ma-item active" data-ma="ma60"><span class="ma-dot" style="background:#26a69a"></span><span>MA60</span></span>
+    </div>
+
+    <div class="info-bar" id="infoBar">
+        <span style="color:#787b86">O</span><span class="value" id="infoOpen">-</span>
+        <span style="color:#787b86">H</span><span class="value" id="infoHigh">-</span>
+        <span style="color:#787b86">L</span><span class="value" id="infoLow">-</span>
+        <span style="color:#787b86">C</span><span class="value" id="infoClose">-</span>
+        <span style="color:#787b86">V</span><span class="value" id="infoVolume">-</span>
+    </div>
+
+    <div class="chart-container">
+        <div id="chart"></div>
+        <div class="loading" id="loading">加载中...</div>
+    </div>
+
+    <script>
+        // ========== 状态 ==========
+        let allCandles = [];
+        let currentStock = null;
+        let chart = null;
+        let candleSeries = null;
+        let volumeSeries = null;
+        let maSeries = {};
+        const maColors = { ma5: '#f0b90b', ma10: '#2962ff', ma20: '#e91e63', ma60: '#26a69a' };
+        const maWindows = { ma5: 5, ma10: 10, ma20: 20, ma60: 60 };
+        let searchTimer = null;
+
+        // ========== 初始化图表 ==========
+        function initChart() {
+            const container = document.getElementById('chart');
+            chart = LightweightCharts.createChart(container, {
+                layout: { background: { type: 'solid', color: '#131722' }, textColor: '#787b86' },
+                grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: '#6b7280', width: 1, style: 2 }, horzLine: { color: '#6b7280', width: 1, style: 2 } },
+                rightPriceScale: { borderColor: '#2a2e39' },
+                timeScale: { borderColor: '#2a2e39', timeVisible: false },
+            });
+
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#ef5350', downColor: '#26a69a', borderDownColor: '#26a69a', borderUpColor: '#ef5350',
+                wickDownColor: '#26a69a', wickUpColor: '#ef5350',
+            });
+
+            volumeSeries = chart.addHistogramSeries({
+                priceFormat: { type: 'volume' },
+                priceScaleId: 'volume',
+            });
+            chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+
+            // MA 均线
+            for (const ma of Object.keys(maColors)) {
+                maSeries[ma] = chart.addLineSeries({ color: maColors[ma], lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            }
+
+            // 十字光标移动时更新信息栏
+            chart.subscribeCrosshairMove(param => {
+                if (!param.time || !allCandles.length) return;
+                const d = allCandles.find(c => c.date === param.time);
+                if (!d) return;
+                const cls = d.close >= d.open ? 'up' : 'down';
+                document.getElementById('infoOpen').textContent = d.open.toFixed(2);
+                document.getElementById('infoHigh').textContent = d.high.toFixed(2);
+                document.getElementById('infoLow').textContent = d.low.toFixed(2);
+                document.getElementById('infoClose').textContent = d.close.toFixed(2);
+                document.getElementById('infoVolume').textContent = formatVolume(d.volume);
+                document.querySelectorAll('#infoBar .value').forEach(el => { el.className = 'value ' + cls; });
+            });
+
+            // 自适应尺寸（使用 ResizeObserver 监听容器变化）
+            const ro = new ResizeObserver(entries => {
+                const { width, height } = entries[0].contentRect;
+                if (width > 0 && height > 0) chart.resize(width, height);
+            });
+            ro.observe(container);
+        }
+
+        // ========== 搜索 ==========
+        const searchInput = document.getElementById('searchInput');
+        const searchDropdown = document.getElementById('searchDropdown');
+
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            const q = searchInput.value.trim();
+            if (!q) { searchDropdown.classList.remove('visible'); return; }
+            searchTimer = setTimeout(() => searchStocks(q), 250);
+        });
+
+        searchInput.addEventListener('keydown', e => { if (e.key === 'Escape') searchDropdown.classList.remove('visible'); });
+        document.addEventListener('click', e => { if (!e.target.closest('.search-box')) searchDropdown.classList.remove('visible'); });
+
+        async function searchStocks(q) {
+            try {
+                const resp = await fetch(`/api/kline/stocks?q=${encodeURIComponent(q)}`);
+                const data = await resp.json();
+                if (!data.length) { searchDropdown.classList.remove('visible'); return; }
+                searchDropdown.innerHTML = data.map(s =>
+                    `<div class="search-item" data-code="${s.sec_code}" data-name="${s.sec_name}"><span class="code">${s.sec_code}</span><span class="name">${s.sec_name}</span></div>`
+                ).join('');
+                searchDropdown.classList.add('visible');
+                searchDropdown.querySelectorAll('.search-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                        const code = el.dataset.code, name = el.dataset.name;
+                        searchInput.value = `${code} ${name}`;
+                        searchDropdown.classList.remove('visible');
+                        loadStock(code, name);
+                    });
+                });
+            } catch (e) { console.error('搜索失败:', e); }
+        }
+
+        // ========== 加载股票数据 ==========
+        async function loadStock(secCode, secName) {
+            currentStock = { code: secCode, name: secName };
+            document.getElementById('stockInfo').innerHTML = `<span class="stock-name">${secName} (${secCode})</span>`;
+            showLoading(true);
+            try {
+                const resp = await fetch(`/api/kline/data?sec_code=${secCode}`);
+                const json = await resp.json();
+                allCandles = json.candles;
+                applyDateRange();
+            } catch (e) {
+                console.error('加载数据失败:', e);
+                document.getElementById('stockInfo').innerHTML = `<span style="color:#ef5350">加载失败: ${e.message}</span>`;
+            }
+            showLoading(false);
+        }
+
+        // ========== 日期范围 ==========
+        function applyDateRange() {
+            const startVal = document.getElementById('startDate').value;
+            const endVal = document.getElementById('endDate').value;
+            let filtered = allCandles;
+            if (startVal) filtered = filtered.filter(c => c.date >= startVal);
+            if (endVal) filtered = filtered.filter(c => c.date <= endVal);
+            renderChart(filtered);
+        }
+
+        function setRange(range) {
+            if (!allCandles.length) return;
+            const lastDate = allCandles[allCandles.length - 1].date;
+            const end = lastDate;
+            let start;
+            const d = new Date(lastDate);
+            switch (range) {
+                case '1m': d.setMonth(d.getMonth() - 1); break;
+                case '3m': d.setMonth(d.getMonth() - 3); break;
+                case '6m': d.setMonth(d.getMonth() - 6); break;
+                case '1y': d.setFullYear(d.getFullYear() - 1); break;
+                case 'all': start = allCandles[0].date; break;
+            }
+            if (!start) start = d.toISOString().slice(0, 10);
+            document.getElementById('startDate').value = start;
+            document.getElementById('endDate').value = end;
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+            applyDateRange();
+        }
+
+        // 快捷时间按钮
+        document.querySelectorAll('.time-btn').forEach(btn => {
+            btn.addEventListener('click', () => setRange(btn.dataset.range));
+        });
+
+        // 日期输入变化
+        document.getElementById('startDate').addEventListener('change', () => {
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+            applyDateRange();
+        });
+        document.getElementById('endDate').addEventListener('change', () => {
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+            applyDateRange();
+        });
+
+        // ========== 渲染图表 ==========
+        function renderChart(data) {
+            if (!data.length) return;
+
+            // K 线数据
+            const candleData = data.map(c => ({ time: c.date, open: c.open, high: c.high, low: c.low, close: c.close }));
+            candleSeries.setData(candleData);
+
+            // 成交量
+            const volumeData = data.map(c => ({
+                time: c.date, value: c.volume,
+                color: c.close >= c.open ? 'rgba(239,83,80,0.4)' : 'rgba(38,166,154,0.4)',
+            }));
+            volumeSeries.setData(volumeData);
+
+            // 均线
+            for (const [ma, win] of Object.entries(maWindows)) {
+                const maData = computeMA(data, win);
+                if (document.querySelector(`.ma-item[data-ma="${ma}"]`).classList.contains('active')) {
+                    maSeries[ma].setData(maData);
+                } else {
+                    maSeries[ma].setData([]);
+                }
+            }
+
+            chart.timeScale().fitContent();
+        }
+
+        function computeMA(data, window) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < window - 1) continue;
+                let sum = 0;
+                for (let j = 0; j < window; j++) sum += data[i - j].close;
+                result.push({ time: data[i].date, value: +(sum / window).toFixed(2) });
+            }
+            return result;
+        }
+
+        // ========== MA 图例切换 ==========
+        document.getElementById('maLegend').addEventListener('click', e => {
+            const item = e.target.closest('.ma-item');
+            if (!item) return;
+            const ma = item.dataset.ma;
+            item.classList.toggle('active');
+            if (item.classList.contains('active')) {
+                const maData = computeMA(allCandles.filter(c => {
+                    const s = document.getElementById('startDate').value, en = document.getElementById('endDate').value;
+                    return (!s || c.date >= s) && (!en || c.date <= en);
+                }), maWindows[ma]);
+                maSeries[ma].setData(maData);
+            } else {
+                maSeries[ma].setData([]);
+            }
+        });
+
+        // ========== 工具函数 ==========
+        function formatVolume(v) {
+            if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿';
+            if (v >= 1e4) return (v / 1e4).toFixed(2) + '万';
+            return v.toString();
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').classList.toggle('visible', show);
+        }
+
+        // ========== 初始化 ==========
+        initChart();
+    </script>
+</body>
+</html>

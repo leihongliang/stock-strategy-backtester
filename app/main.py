@@ -1,6 +1,8 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from app.config.settings import settings
-from app.routes import update_router, strategy_router
+from app.routes import update_router, strategy_router, kline_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -11,19 +13,10 @@ app = FastAPI(
 # 注册路由
 app.include_router(update_router.router)
 app.include_router(strategy_router.router)
+app.include_router(kline_router.router)
 
-@app.get("/")
-def read_root():
-    """根路径"""
-    return {
-        "name": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "description": "A股股票涨跌模式查询API",
-        "endpoints": {
-            "find_stocks": "/api/stocks/pattern",
-            "refresh_data": "/api/stocks/refresh",
-            "update_stock": "/api/stocks/update",
-            "refresh_companies": "/api/stocks/companies",
-            "get_hsgt_stocks": "/api/stocks/hsgt"
-        }
-    }
+# 挂载静态文件（前端页面）
+static_dir = Path(__file__).parent.parent / "static"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+

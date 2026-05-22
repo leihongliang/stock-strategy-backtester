@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
-from app.models.stock import StrategyValidationRequest
+from app.models.stock import StrategyValidationRequest, MultiStrategyBacktestRequest
 from app.services.stock_service import StockService
 import datetime
-from app.services.strategies import validate_513_strategy as validate_513
+from app.services.strategies import validate_513_strategy as validate_513, multi_strategy_backtest, validate_macd_rejuvenation
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks-strategy"])
 stock_service = StockService()
@@ -22,6 +22,32 @@ def validate_strategy(request: StrategyValidationRequest):
             request.strategy_name,
             request.start_date,
             request.end_date
+        )
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+
+@router.post("/strategy/backtest")
+def backtest_multi_strategy(request: MultiStrategyBacktestRequest):
+    """多策略回测接口
+    
+    输入一组股票代码和时间段，运行预设的所有策略，分析每个策略结束后的收益。
+    
+    预设策略：
+    - ma5_ma20_cross: MA5/MA20金叉死叉（MA5上穿MA20买，下穿MA20卖）
+    - price_breakout_20w_10w: 价格突破20周最高买，跌破10周最低卖
+    
+    Args:
+        request: 多策略回测请求
+    """
+    try:
+        result = multi_strategy_backtest(
+            stock_service,
+            request.stock_codes,
+            request.start_date,
+            request.end_date,
+            request.strategies
         )
         
         return result
@@ -54,7 +80,34 @@ def validate_513_strategy(request: StrategyValidationRequest, consecutive_days: 
             verification_days,
             request.stock_codes
         )
-        
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+
+@router.post("/strategy/validate/macd-rejuvenation")
+def validate_macd_rejuvenation_strategy(request: StrategyValidationRequest):
+    """回春战法验证接口
+
+    在指定时间段内扫描所有股票，寻找符合回春战法条件的股票。
+
+    回春战法三要素（MACD参数10,20,9）：
+    1. MACD金叉到第一个死叉，涨幅≥40%
+    2. 死叉后出现的第一个金叉，在0轴附近
+    3. 股价在60日均线之上，60日均线向上
+
+    买点：即将金叉时买入，需有明显放量
+
+    Args:
+        request: 策略验证请求，包含start_date、end_date和可选的stock_codes
+    """
+    try:
+        result = validate_macd_rejuvenation(
+            stock_service,
+            request.start_date,
+            request.end_date,
+            request.stock_codes
+        )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")

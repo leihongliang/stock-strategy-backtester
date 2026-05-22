@@ -149,3 +149,10 @@ class StrategyValidationRequest(BaseModel):
     start_date: str = None  # 开始日期，格式为"YYYY-MM-DD"
     end_date: str = None    # 结束日期，格式为"YYYY-MM-DD"
     stock_codes: list[str] = None  # 股票代码列表，为None时验证所有股票
+
+class MultiStrategyBacktestRequest(BaseModel):
+    """多策略回测请求模型"""
+    stock_codes: list[str]  # 股票代码列表
+    start_date: str  # 开始日期，格式为"YYYY-MM-DD"
+    end_date: str    # 结束日期，格式为"YYYY-MM-DD"
+    strategies: list[str] = None  # 策略列表，为None时运行所有预设策略

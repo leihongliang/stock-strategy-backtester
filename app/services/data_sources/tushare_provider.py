@@ -212,7 +212,9 @@ class TushareProvider:
                 ts_code_str = ",".join(ts_codes)
 
                 # 获取数据
+                logger.info(f"开始从Tushare API获取数据，共 {len(ts_codes)} 个股票代码")
                 k_data = pro.daily(ts_code=ts_code_str, start_date=start_date, end_date=end_date)
+                logger.info(f"Tushare API返回数据，共 {len(k_data)} 条记录")
 
                 # 转换为StockDailyPrice对象列表
                 stock_price_list = []
@@ -221,6 +223,9 @@ class TushareProvider:
                     k_data = k_data.sort_values(['ts_code', 'trade_date'])
                     # 重置索引
                     k_data = k_data.reset_index(drop=True)
+
+                    logger.info(f"开始转换 {len(k_data)} 条Tushare数据为StockDailyPrice对象")
+                    converted_count = 0
 
                     for _, row in k_data.iterrows():
                         # 获取原始股票代码
@@ -271,8 +276,15 @@ class TushareProvider:
                         )
 
                         stock_price_list.append(stock_price)
+                        converted_count += 1
 
-                logger.info(f"从Tushare批量获取{len(stock_codes)}只股票的{start_date}-{end_date}日K线数据成功，共 {len(k_data)} 条记录")
+                        # 每200条记录打印转换进度
+                        if converted_count % 200 == 0:
+                            logger.info(f"已转换 {converted_count}/{len(k_data)} 条记录")
+
+                    logger.info(f"数据转换完成，共转换 {converted_count} 条记录为StockDailyPrice对象")
+
+                logger.info(f"从Tushare批量获取{len(stock_codes)}只股票的{start_date}-{end_date}日K线数据成功，共 {len(stock_price_list)} 条记录")
                 # 成功后增加等待时间，降低请求频率
                 time.sleep(1)
                 return stock_price_list
