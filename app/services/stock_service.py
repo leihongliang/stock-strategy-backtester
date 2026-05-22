@@ -172,7 +172,12 @@ class StockService:
         k_data['low'] = k_data['low'] / 100
         k_data['close'] = k_data['close'] / 100
 
-        k_data['date'] = pd.to_datetime(k_data['date'])
+        try:
+            k_data['date'] = pd.to_datetime(k_data['date'])
+        except Exception as e:
+            logger.error(f"股票 {sec_code} 的日期转换失败: {e}")
+            logger.error(f"日期列数据示例: {k_data['date'].head(10).tolist()}")
+            return None
         k_data = k_data.sort_values('date').reset_index(drop=True)
 
         k_data['pct_change'] = k_data['close'].pct_change() * 100
@@ -187,6 +192,15 @@ class StockService:
         k_data['ma5'] = k_data['close'].rolling(window=5).mean()
         k_data['ma10'] = k_data['close'].rolling(window=10).mean()
         k_data['ma20'] = k_data['close'].rolling(window=20).mean()
+        k_data['ma60'] = k_data['close'].rolling(window=60).mean()
+        k_data['ma120'] = k_data['close'].rolling(window=120).mean()
+        k_data['ma200'] = k_data['close'].rolling(window=200).mean()
+
+        k_data['ema12'] = k_data['close'].ewm(span=12, adjust=False).mean()
+        k_data['ema26'] = k_data['close'].ewm(span=26, adjust=False).mean()
+        k_data['macd'] = k_data['ema12'] - k_data['ema26']
+        k_data['macd_signal'] = k_data['macd'].ewm(span=9, adjust=False).mean()
+        k_data['macd_hist'] = k_data['macd'] - k_data['macd_signal']
 
         return k_data
 
@@ -394,12 +408,38 @@ class StockService:
         # 生成交易日范围
         date_range = pd.DatetimeIndex([pd.Timestamp(day) for day in trading_days])
         
+        logger.info(f"指定日期范围内共有 {len(trading_days)} 个交易日")
+        
+        # 单只股票优化：Tushare接口每次最多返回6000条数据，无需按天查询
+        if len(stocks_to_sync) == 1:
+            logger.info(f"单只股票优化：直接查询 {start_date} 至 {end_date} 的完整数据")
+            try:
+                k_data = self.get_daily_k_data_batch(stocks_to_sync, start_date, end_date, data_source)
+                if k_data and len(k_data) > 0:
+                    success = self.repo.save_stock_prices(k_data)
+                    if success:
+                        logger.info(f"成功同步 {stocks_to_sync[0]} 的数据，共 {len(k_data)} 条记录")
+                        return {
+                            "message": "同步成功",
+                            "success": True,
+                            "processed_days": len(trading_days),
+                            "saved_days": 1,
+                            "total_records": len(k_data)
+                        }
+                    else:
+                        logger.error(f"保存数据失败")
+                        return {"message": "保存数据失败", "success": False}
+                else:
+                    logger.error(f"获取数据失败")
+                    return {"message": "获取数据失败", "success": False}
+            except Exception as e:
+                logger.error(f"同步数据时出错: {e}")
+                return {"message": f"同步数据时出错: {str(e)}", "success": False}
+        
         # 同步数据
         processed_days = 0
         saved_count = 0
         total_records = 0
-        
-        logger.info(f"指定日期范围内共有 {len(trading_days)} 个交易日")
         
         for single_date in date_range:
             try:

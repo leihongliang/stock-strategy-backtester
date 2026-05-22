@@ -37,6 +37,12 @@ def process_stock(stock_code: str, stock_service, strategy_func, start_date, end
         stock_name = company.get('sec_name', '')
         market = company.get('market', '')
     
+    # 只处理主板股票：沪市600/601/603/605开头，深市000开头
+    stock_code_str = str(stock_code)
+    if not (stock_code_str.startswith('600') or stock_code_str.startswith('601') or stock_code_str.startswith('603') or stock_code_str.startswith('605') or stock_code_str.startswith('000')):
+        logger.debug(f"跳过非主板股票: {stock_code} - {stock_name}")
+        return {"matches": [], "total_cases": 0, "successful_cases": 0}
+    
     logger.debug(f"处理股票: {stock_code} - {stock_name}")
     
     # Load data from database匹配时间段
@@ -192,62 +198,74 @@ def validate_513_strategy(stock_service, start_date=None, end_date=None, consecu
     
     def process_stock_with_params(stock_code: str) -> Optional[dict]:
         """处理单个股票的513策略验证（带参数）"""
-        # 从数据库获取股票名称和市场信息
-        stock_name = ""
-        market = ""
-        # 尝试从数据库获取股票公司信息
-        company = stock_service.get_stock_company_by_code(stock_code)
-        if company:
-            stock_name = company.get('sec_name', '')
-            market = company.get('market', '')
-        
-        logger.debug(f"处理股票: {stock_code} - {stock_name}")
-        
-        # Load data from database
-        k_data = stock_service.load_stock_data(stock_code)
-        
-        if k_data is not None:
-            logger.debug(f"成功加载 {stock_code} 的历史数据，共 {len(k_data)} 条记录")
+        try:
+            # 从数据库获取股票名称和市场信息
+            stock_name = ""
+            market = ""
+            # 尝试从数据库获取股票公司信息
+            company = stock_service.get_stock_company_by_code(stock_code)
+            if company:
+                stock_name = company.get('sec_name', '')
+                market = company.get('market', '')
             
-            # Filter data within time range
-            if start_date and end_date:
-                start_date_dt = pd.to_datetime(start_date)
-                end_date_dt = pd.to_datetime(end_date)
-                filtered_data = k_data[(k_data['date'] >= start_date_dt) & (k_data['date'] <= end_date_dt)]
-                logger.debug(f"时间范围筛选后，剩余 {len(filtered_data)} 条记录")
+            # 只处理主板股票：沪市600/601/603/605开头，深市000开头
+            stock_code_str = str(stock_code)
+            if not (stock_code_str.startswith('600') or stock_code_str.startswith('601') or stock_code_str.startswith('603') or stock_code_str.startswith('605') or stock_code_str.startswith('000')):
+                logger.debug(f"跳过非主板股票: {stock_code} - {stock_name}")
+                return None
+            
+            logger.debug(f"处理股票: {stock_code} - {stock_name}")
+            
+            # Load data from database
+            k_data = stock_service.load_stock_data(stock_code)
+            
+            if k_data is not None:
+                logger.debug(f"成功加载 {stock_code} 的历史数据，共 {len(k_data)} 条记录")
+                
+                # Filter data within time range
+                if start_date and end_date:
+                    start_date_dt = pd.to_datetime(start_date)
+                    end_date_dt = pd.to_datetime(end_date)
+                    filtered_data = k_data[(k_data['date'] >= start_date_dt) & (k_data['date'] <= end_date_dt)]
+                    logger.debug(f"时间范围筛选后，剩余 {len(filtered_data)} 条记录")
+                else:
+                    filtered_data = k_data
+                
+                # Apply strategy with custom parameters
+                logger.debug(f"应用513策略到 {stock_code}")
+                strategy_result = strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days, verification_days)
+                
+                # Log results
+                if strategy_result:
+                    match_count = len(strategy_result['matches'])
+                    if match_count > 0:
+                        for match in strategy_result['matches']:
+                            period = match.get('period', '未知时间段')
+                            abnormal_up_day_date = match.get('abnormal_up_day_date', '未知日期')
+                            # 计算涨幅信息
+                            buy_day_open = match.get('buy_day_open', 0)
+                            # 尝试从数据中计算5日、10日、20日涨幅
+                            five_day_increase = match.get('5_day_increase', 'N/A')
+                            ten_day_increase = match.get('10_day_increase', 'N/A')
+                            twenty_day_increase = match.get('20_day_increase', 'N/A')
+                            
+                            # 格式化涨幅值，保留两位小数
+                            def format_increase(value):
+                                if isinstance(value, (int, float)):
+                                    return f"{value:.2f}%"
+                                return "N/A"
+                            
+                            # 打印详细日志（一行）
+                            logger.info(f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, 异动日: {abnormal_up_day_date}, 买入价格: {buy_day_open}, 5日后涨幅: {format_increase(five_day_increase)}, 10日后涨幅: {format_increase(ten_day_increase)}, 20日涨幅: {format_increase(twenty_day_increase)}")
+                
+                return strategy_result
             else:
-                filtered_data = k_data
-            
-            # Apply strategy with custom parameters
-            logger.debug(f"应用513策略到 {stock_code}")
-            strategy_result = strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days, verification_days)
-            
-            # Log results
-            if strategy_result:
-                match_count = len(strategy_result['matches'])
-                if match_count > 0:
-                    for match in strategy_result['matches']:
-                        period = match.get('period', '未知时间段')
-                        abnormal_up_day_date = match.get('abnormal_up_day_date', '未知日期')
-                        # 计算涨幅信息
-                        buy_day_open = match.get('abnormal_up_day_open', 0)
-                        # 尝试从数据中计算5日、10日、20日涨幅
-                        five_day_increase = match.get('5_day_increase', 'N/A')
-                        ten_day_increase = match.get('10_day_increase', 'N/A')
-                        twenty_day_increase = match.get('20_day_increase', 'N/A')
-                        
-                        # 格式化涨幅值，保留两位小数
-                        def format_increase(value):
-                            if isinstance(value, (int, float)):
-                                return f"{value:.2f}%"
-                            return "N/A"
-                        
-                        # 打印详细日志（一行）
-                        logger.info(f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, 异动日: {abnormal_up_day_date}, 异动阳线后第四天开盘买入价格: {buy_day_open}, 5日后涨幅: {format_increase(five_day_increase)}, 10日后涨幅: {format_increase(ten_day_increase)}, 20日涨幅: {format_increase(twenty_day_increase)}")
-            
-            return strategy_result
-        else:
-            logger.warning(f"无法加载股票 {stock_code} 的历史数据")
+                logger.warning(f"无法加载股票 {stock_code} 的历史数据")
+                return None
+        except Exception as e:
+            logger.error(f"处理股票 {stock_code} 时发生错误: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             return None
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -405,6 +423,147 @@ def strategy1(filtered_data, stock_code, stock_name, market):
         'successful_cases': successful_cases
     }
 
+
+
+ALL_STRATEGIES = ['ma5_ma20_cross', 'ma5_ma20_cross_ma60', 'ma5_ma20_cross_ma120',
+                  'price_breakout_20w_10w', 'buy_and_hold',
+                  'macd_cross', 'macd_cross_ma60', 'macd_cross_ma120']
+
+def multi_strategy_backtest(stock_service, stock_codes, start_date, end_date, strategies=None):
+    """多策略回测
+    
+    对指定股票列表和时间段运行多个策略，分析每个策略结束后的收益。
+    
+    Args:
+        stock_service: StockService实例
+        stock_codes: 股票代码列表
+        start_date: 开始日期，格式为"YYYY-MM-DD"
+        end_date: 结束日期，格式为"YYYY-MM-DD"
+        strategies: 策略名称列表，为None时运行所有预设策略
+        
+    Returns:
+        dict: 包含每个股票的回测结果，按股票分组
+    """
+    if strategies is None:
+        strategies = ALL_STRATEGIES
+    
+    logger.info(f"开始多策略回测")
+    logger.info(f"股票数量: {len(stock_codes)}")
+    logger.info(f"时间范围: {start_date} 至 {end_date}")
+    logger.info(f"策略列表: {strategies}")
+    
+    results = {}
+    
+    for strategy_name in strategies:
+        if strategy_name not in STRATEGIES:
+            logger.warning(f"策略 '{strategy_name}' 未注册，跳过")
+            continue
+        
+        logger.info(f"正在回测策略: {strategy_name}")
+        
+        strategy_func = STRATEGIES[strategy_name]
+        
+        max_workers = 200
+        
+        def process_single_stock(stock_code):
+            try:
+                stock_name = ""
+                market = ""
+                company = stock_service.get_stock_company_by_code(stock_code)
+                if company:
+                    stock_name = company.get('sec_name', '')
+                    market = company.get('market', '')
+                
+                k_data = stock_service.load_stock_data(stock_code)
+                
+                if k_data is not None:
+                    start_date_dt = pd.to_datetime(start_date)
+                    end_date_dt = pd.to_datetime(end_date)
+                    filtered_data = k_data[(k_data['date'] >= start_date_dt) & (k_data['date'] <= end_date_dt)]
+                    
+                    if len(filtered_data) > 0:
+                        strategy_result = strategy_func(filtered_data, stock_code, stock_name, market)
+                        return {
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'market': market,
+                            'strategy_name': strategy_name,
+                            'strategy_result': strategy_result
+                        }
+                return None
+            except Exception as e:
+                logger.error(f"处理股票 {stock_code} 时发生错误: {str(e)}")
+                return None
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_single_stock, stock): stock for stock in stock_codes}
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    stock_code = result['stock_code']
+                    strategy_result = result['strategy_result']
+                    
+                    if stock_code not in results:
+                        results[stock_code] = {
+                            'stock_code': stock_code,
+                            'stock_name': result['stock_name'],
+                            'market': result['market'],
+                            'strategies': {}
+                        }
+                    
+                    if strategy_result is None:
+                        continue
+                    
+                    total_cases = strategy_result.get('total_cases', 0)
+                    successful_cases = strategy_result.get('successful_cases', 0)
+                    win_rate = (successful_cases / total_cases * 100) if total_cases > 0 else 0
+                    
+                    all_matches = strategy_result.get('matches', [])
+                    avg_profit = 0
+                    total_profit = 0
+                    if all_matches:
+                        profit_sum = sum(m.get('profit_ratio', 0) for m in all_matches if isinstance(m.get('profit_ratio'), (int, float)))
+                        total_profit = profit_sum
+                        avg_profit = profit_sum / len(all_matches) if all_matches else 0
+                        
+                        compound_return = 1.0
+                        for m in all_matches:
+                            if isinstance(m.get('profit_ratio'), (int, float)):
+                                compound_return *= (1 + m.get('profit_ratio', 0) / 100)
+                        total_return_rate = (compound_return - 1) * 100
+                    else:
+                        total_return_rate = 0
+                    
+                    results[stock_code]['strategies'][strategy_name] = {
+                        'strategy_name': strategy_name,
+                        'strategy_display_name': get_strategy_display_name(strategy_name),
+                        'total_trades': total_cases,
+                        'successful_trades': successful_cases,
+                        'win_rate': win_rate,
+                        'total_return_rate': total_return_rate,
+                        'total_profit': total_profit,
+                        'average_profit': avg_profit,
+                        'matches': all_matches
+                    }
+    
+    for stock_code in results:
+        logger.info(f"股票 {stock_code} ({results[stock_code]['stock_name']}) 回测完成")
+    
+    return results
+
+def get_strategy_display_name(strategy_name):
+    """获取策略的中文显示名称"""
+    display_names = {
+        'ma5_ma20_cross': 'MA5/MA20金叉死叉',
+        'ma5_ma20_cross_ma60': 'MA5/MA20金叉死叉(MA60过滤)',
+        'ma5_ma20_cross_ma120': 'MA5/MA20金叉死叉(MA120过滤)',
+        'price_breakout_20w_10w': '价格突破20周最高买跌破10周最低卖',
+        'buy_and_hold': '买入持有策略',
+        'macd_cross': 'MACD金叉买死叉卖'
+    }
+    return display_names.get(strategy_name, strategy_name)
+
 @register_strategy('strategy2')
 def strategy2(filtered_data, stock_code, stock_name, market):
     """策略2实现: 简单金叉策略"""
@@ -483,9 +642,12 @@ def strategy2(filtered_data, stock_code, stock_name, market):
         'successful_cases': successful_cases
     }
 
-@register_strategy('strategy_513')
-@register_strategy('rising_surge_3')  # 英文名字
 
+
+
+
+@register_strategy('price_breakout_20w_10w')
+@register_strategy('rising_surge_3')
 def strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days=4, verification_days=3):
     """513战法实现: 连续上涨≥N天（允许夹一根小阴线），出现放量大阳线，后续M天不跌破异动阳线的开盘价
 
@@ -546,7 +708,7 @@ def strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days
             next_days = df[next_days_mask].head(verification_days)
             
             if len(next_days) == verification_days:
-                valid_verification = (next_days['low'] >= abnormal_day['open']).all()
+                valid_verification = (next_days['low'] >= abnormal_day['open']).all() and (next_days['volume'] < abnormal_day['volume']).all()
             else:
                 valid_verification = False
 
@@ -564,7 +726,7 @@ def strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days
 
                 buy_day = df.iloc[buy_day_idx_in_df] if buy_day_idx_in_df < len(df) else None
                 buy_day_open = buy_day['open'] if buy_day is not None else None
-                buy_day_label = buy_day.name
+                buy_day_label = buy_day.name if buy_day is not None else None
 
                 future_5_day = df.loc[buy_day_label:].iloc[5] if buy_day_label is not None and len(df.loc[buy_day_label:]) > 5 else None
                 future_10_day = df.loc[buy_day_label:].iloc[10] if buy_day_label is not None and len(df.loc[buy_day_label:]) > 10 else None
@@ -591,4 +753,557 @@ def strategy_513(filtered_data, stock_code, stock_name, market, consecutive_days
         'matches': matches,
         'total_cases': total_cases,
         'successful_cases': successful_cases
+    }
+
+@register_strategy('ma5_ma20_cross')
+def ma5_ma20_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=None):
+    """MA5/MA20金叉死叉策略
+    
+    买入条件：MA5上穿MA20（金叉）
+    卖出条件：MA5下穿MA20（死叉）
+    ma_filter: 均线过滤参数，可选 60 或 120，表示股票必须处于该周期均线上方才买入
+                为 None 时表示不进行均线过滤
+    计算从买入到卖出的收益率
+    """
+    matches = []
+    total_cases = 0
+    successful_cases = 0
+    
+    if len(filtered_data) < 5:
+        return {'matches': matches, 'total_cases': total_cases, 'successful_cases': successful_cases}
+    
+    df = filtered_data.copy()
+    df['MA5'] = df['ma5']
+    df['MA20'] = df['ma20']
+    
+    df['MA_FILTER'] = df['ma60'] if ma_filter == 60 else (df['ma120'] if ma_filter == 120 else None)
+
+    position = None
+
+    for i in range(1, len(df)):
+        if df.iloc[i-1]['MA5'] <= df.iloc[i-1]['MA20'] and df.iloc[i]['MA5'] > df.iloc[i]['MA20']:
+            if position is None:
+                can_buy = True
+                if ma_filter is not None and df.iloc[i]['close'] < df.iloc[i]['MA_FILTER']:
+                        can_buy = False
+                if can_buy:
+                    position = {
+                        'buy_date': df.iloc[i]['date'].strftime('%Y-%m-%d'),
+                        'buy_price': df.iloc[i]['close'],
+                        'buy_index': i
+                    }
+        elif df.iloc[i-1]['MA5'] >= df.iloc[i-1]['MA20'] and df.iloc[i]['MA5'] < df.iloc[i]['MA20']:
+            if position is not None:
+                sell_price = df.iloc[i]['close']
+                sell_date = df.iloc[i]['date'].strftime('%Y-%m-%d')
+                buy_price = position['buy_price']
+                
+                total_cases += 1
+                profit_ratio = (sell_price - buy_price) / buy_price * 100
+                
+                if profit_ratio > 0:
+                    successful_cases += 1
+                
+                holding_days = i - position['buy_index']
+                
+                matches.append({
+                    'code': stock_code,
+                    'name': stock_name,
+                    'market': market,
+                    'buy_date': position['buy_date'],
+                    'buy_price': buy_price,
+                    'sell_date': sell_date,
+                    'sell_price': sell_price,
+                    'profit_ratio': profit_ratio,
+                    'holding_days': holding_days,
+                    'result': '盈利' if profit_ratio > 0 else '亏损'
+                })
+                position = None
+
+    return {
+        'matches': matches,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases
+    }
+
+
+
+@register_strategy('ma5_ma20_cross_ma60')
+def ma5_ma20_cross_ma60_strategy(filtered_data, stock_code, stock_name, market):
+    """MA5/MA20金叉死叉策略（MA60过滤）
+    
+    买入条件：MA5上穿MA20（金叉）且股价高于MA60
+    卖出条件：MA5下穿MA20（死叉）
+    计算从买入到卖出的收益率
+    """
+    return ma5_ma20_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=60)
+
+
+@register_strategy('ma5_ma20_cross_ma120')
+def ma5_ma20_cross_ma120_strategy(filtered_data, stock_code, stock_name, market):
+    """MA5/MA20金叉死叉策略（MA120过滤）
+    
+    买入条件：MA5上穿MA20（金叉）且股价高于MA120
+    卖出条件：MA5下穿MA20（死叉）
+    计算从买入到卖出的收益率
+    """
+    return ma5_ma20_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=120)
+
+@register_strategy('price_breakout_20w_10w')
+def price_breakout_20w_10w_strategy(filtered_data, stock_code, stock_name, market):
+    """价格突破前20周最高点买，跌破10周最低点卖策略
+    
+    买入条件：当前价格突破前20周（100个交易日）的最高价
+    卖出条件：当前价格跌破前10周（50个交易日）的最低价
+    计算从买入到卖出的收益率
+    """
+    matches = []
+    total_cases = 0
+    successful_cases = 0
+    
+    if len(filtered_data) < 100:
+        return {'matches': matches, 'total_cases': total_cases, 'successful_cases': successful_cases}
+    
+    df = filtered_data.copy()
+    
+    position = None
+    
+    for i in range(100, len(df)):
+        current_high_100 = df.iloc[i-100:i]['high'].max()
+        current_low_50 = df.iloc[i-50:i]['low'].min()
+        current_price = df.iloc[i]['close']
+        current_date = df.iloc[i]['date'].strftime('%Y-%m-%d')
+        
+        if position is None:
+            if current_price > current_high_100:
+                position = {
+                    'buy_date': current_date,
+                    'buy_price': current_price,
+                    'buy_index': i,
+                    'breakout_high': current_high_100
+                }
+        else:
+            if current_price < current_low_50:
+                sell_price = current_price
+                sell_date = current_date
+                buy_price = position['buy_price']
+                
+                total_cases += 1
+                profit_ratio = (sell_price - buy_price) / buy_price * 100
+                
+                if profit_ratio > 0:
+                    successful_cases += 1
+                
+                holding_days = i - position['buy_index']
+                
+                matches.append({
+                    'code': stock_code,
+                    'name': stock_name,
+                    'market': market,
+                    'buy_date': position['buy_date'],
+                    'buy_price': buy_price,
+                    'breakout_high': position['breakout_high'],
+                    'sell_date': sell_date,
+                    'sell_price': sell_price,
+                    'stop_loss_low': current_low_50,
+                    'profit_ratio': profit_ratio,
+                    'holding_days': holding_days,
+                    'result': '盈利' if profit_ratio > 0 else '亏损'
+                })
+                position = None
+    
+    return {
+        'matches': matches,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases
+    }
+
+@register_strategy('buy_and_hold')
+def buy_and_hold_strategy(filtered_data, stock_code, stock_name, market):
+    """买入持有策略
+    
+    在时间起点买入，时间终点卖出，不做任何操作。
+    """
+    matches = []
+    total_cases = 0
+    successful_cases = 0
+    
+    if len(filtered_data) < 2:
+        return {'matches': matches, 'total_cases': total_cases, 'successful_cases': successful_cases}
+    
+    buy_row = filtered_data.iloc[0]
+    sell_row = filtered_data.iloc[-1]
+    
+    buy_date = buy_row['date'].strftime('%Y-%m-%d')
+    buy_price = buy_row['close']
+    sell_date = sell_row['date'].strftime('%Y-%m-%d')
+    sell_price = sell_row['close']
+    
+    total_cases += 1
+    profit_ratio = (sell_price - buy_price) / buy_price * 100
+    
+    if profit_ratio > 0:
+        successful_cases += 1
+    
+    holding_days = (filtered_data.iloc[-1]['date'] - filtered_data.iloc[0]['date']).days
+    
+    matches.append({
+        'code': stock_code,
+        'name': stock_name,
+        'market': market,
+        'buy_date': buy_date,
+        'buy_price': buy_price,
+        'sell_date': sell_date,
+        'sell_price': sell_price,
+        'profit_ratio': profit_ratio,
+        'holding_days': holding_days,
+        'result': '盈利' if profit_ratio > 0 else '亏损'
+    })
+    
+    return {
+        'matches': matches,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases
+    }
+
+
+@register_strategy('macd_cross')
+def macd_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=None):
+    """MACD金叉买死叉卖策略
+    
+    买入条件：MACD柱由负转正（DIF从下方穿过DEA）
+    卖出条件：MACD柱由正转负（DIF从上方穿过DEA）
+    ma_filter: 均线过滤参数，可选 60 或 120，表示股票必须处于该周期均线上方才买入
+                为 None 时表示不进行均线过滤
+    计算从买入到卖出的收益率
+    """
+    matches = []
+    total_cases = 0
+    successful_cases = 0
+    
+    if len(filtered_data) < 2:
+        return {'matches': matches, 'total_cases': total_cases, 'successful_cases': successful_cases}
+    
+    df = filtered_data.copy()
+    
+    if 'macd' not in df.columns or 'macd_signal' not in df.columns:
+        df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
+        df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = df['ema12'] - df['ema26']
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    
+    df['macd_hist'] = df['macd'] - df['macd_signal']
+
+    df['MA_FILTER'] = df['ma60'] if ma_filter == 60 else (df['ma120'] if ma_filter == 120 else None)
+
+    position = None
+
+    for i in range(1, len(df)):
+        prev_macd_hist = df.iloc[i-1]['macd_hist']
+        curr_macd_hist = df.iloc[i]['macd_hist']
+
+        if prev_macd_hist <= 0 and curr_macd_hist > 0:
+            if position is None and df.iloc[i]['macd'] > 0:
+                can_buy = True
+                if ma_filter is not None and df.iloc[i]['close'] < df.iloc[i]['MA_FILTER']:
+                        can_buy = False
+                if can_buy:
+                    position = {
+                        'buy_date': df.iloc[i]['date'].strftime('%Y-%m-%d'),
+                        'buy_price': df.iloc[i]['close'],
+                        'buy_index': i,
+                        'macd_hist_at_buy': curr_macd_hist
+                    }
+        elif prev_macd_hist >= 0 and curr_macd_hist < 0:
+            if position is not None:
+                sell_price = df.iloc[i]['close']
+                sell_date = df.iloc[i]['date'].strftime('%Y-%m-%d')
+                buy_price = position['buy_price']
+                
+                total_cases += 1
+                profit_ratio = (sell_price - buy_price) / buy_price * 100
+                
+                if profit_ratio > 0:
+                    successful_cases += 1
+                
+                holding_days = i - position['buy_index']
+                
+                matches.append({
+                    'code': stock_code,
+                    'name': stock_name,
+                    'market': market,
+                    'buy_date': position['buy_date'],
+                    'buy_price': buy_price,
+                    'sell_date': sell_date,
+                    'sell_price': sell_price,
+                    'profit_ratio': profit_ratio,
+                    'holding_days': holding_days,
+                    'result': '盈利' if profit_ratio > 0 else '亏损'
+                })
+                position = None
+    
+    return {
+        'matches': matches,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases
+    }
+
+
+@register_strategy('macd_cross_ma60')
+def macd_cross_ma60_strategy(filtered_data, stock_code, stock_name, market):
+    """MACD金叉买死叉卖策略（MA60过滤）
+
+    买入条件：MACD柱由负转正（DIF从下方穿过DEA）且股价高于MA60
+    卖出条件：MACD柱由正转负（DIF从上方穿过DEA）
+    计算从买入到卖出的收益率
+    """
+    return macd_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=60)
+
+
+@register_strategy('macd_cross_ma120')
+def macd_cross_ma120_strategy(filtered_data, stock_code, stock_name, market):
+    """MACD金叉买死叉卖策略（MA120过滤）
+
+    买入条件：MACD柱由负转正（DIF从下方穿过DEA）且股价高于MA120
+    卖出条件：MACD柱由正转负（DIF从上方穿过DEA）
+    计算从买入到卖出的收益率
+    """
+    return macd_cross_strategy(filtered_data, stock_code, stock_name, market, ma_filter=120)
+
+
+@register_strategy('macd_rejuvenation')
+def macd_rejuvenation_strategy(filtered_data, stock_code, stock_name, market):
+    """回春战法: MACD(10,20,9)参数下的特殊形态
+
+    条件1: MACD金叉到第一个死叉，涨幅≥40%
+    条件2: 死叉后出现的第一个金叉，在0轴附近
+    条件3: 股价在60日均线之上，60日均线向上
+    买点: 即将金叉时买入，需有明显放量
+    """
+    matches = []
+    total_cases = 0
+    successful_cases = 0
+
+    if len(filtered_data) < 30:
+        return {'matches': matches, 'total_cases': total_cases, 'successful_cases': successful_cases}
+
+    df = filtered_data.copy()
+
+    # 计算自定义MACD(10,20,9)
+    df['ema10'] = df['close'].ewm(span=10, adjust=False).mean()
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['dif'] = df['ema10'] - df['ema20']
+    df['dea'] = df['dif'].ewm(span=9, adjust=False).mean()
+    df['macd_hist'] = (df['dif'] - df['dea']) * 2
+
+    df = df.reset_index(drop=True)
+
+    golden_cross_idx = None
+
+    for i in range(1, len(df)):
+        prev_hist = df.iloc[i - 1]['macd_hist']
+        curr_hist = df.iloc[i]['macd_hist']
+
+        # 金叉: MACD柱由负转正
+        if prev_hist <= 0 and curr_hist > 0:
+            if golden_cross_idx is None:
+                golden_cross_idx = i
+            continue
+
+        # 死叉: MACD柱由正转负
+        if prev_hist >= 0 and curr_hist < 0 and golden_cross_idx is not None:
+            death_cross_idx = i
+
+            # 条件1: 金叉到死叉涨幅≥40%
+            gc_close = df.iloc[golden_cross_idx]['close']
+            dc_close = df.iloc[death_cross_idx]['close']
+            gain_pct = (dc_close - gc_close) / gc_close * 100
+
+            if gain_pct < 40:
+                golden_cross_idx = None
+                continue
+
+            # 寻找死叉后第一个金叉
+            next_golden_idx = None
+            for j in range(death_cross_idx + 1, len(df)):
+                if df.iloc[j - 1]['macd_hist'] <= 0 and df.iloc[j]['macd_hist'] > 0:
+                    next_golden_idx = j
+                    break
+
+            if next_golden_idx is None:
+                golden_cross_idx = None
+                continue
+
+            # 条件2: 金叉在0轴附近
+            macd_at_gc = df.iloc[next_golden_idx]['macd']
+            recent_range = df.iloc[max(0, death_cross_idx - 20):death_cross_idx + 1]['macd'].max() - \
+                           df.iloc[max(0, death_cross_idx - 20):death_cross_idx + 1]['macd'].min()
+            threshold = max(recent_range * 0.2, 0.01)
+            if abs(macd_at_gc) > threshold:
+                golden_cross_idx = None
+                continue
+
+            # 条件3: 股价在MA60之上，MA60向上
+            if 'ma60' in df.columns:
+                ma60_val = df.iloc[next_golden_idx]['ma60']
+                price = df.iloc[next_golden_idx]['close']
+                if pd.isna(ma60_val) or price < ma60_val:
+                    golden_cross_idx = None
+                    continue
+                ma60_5ago = df.iloc[max(0, next_golden_idx - 5)]['ma60']
+                if pd.isna(ma60_5ago) or ma60_val <= ma60_5ago:
+                    golden_cross_idx = None
+                    continue
+            else:
+                golden_cross_idx = None
+                continue
+
+            # 放量检查: 金叉日成交量≥5日均量的1.5倍
+            if next_golden_idx >= 5:
+                avg_vol = df.iloc[next_golden_idx - 5:next_golden_idx]['volume'].mean()
+                if avg_vol > 0 and df.iloc[next_golden_idx]['volume'] < avg_vol * 1.5:
+                    golden_cross_idx = None
+                    continue
+
+            # 计算后续收益
+            total_cases += 1
+            five_day_increase = None
+            ten_day_increase = None
+            twenty_day_increase = None
+            success = False
+
+            buy_price = df.iloc[next_golden_idx]['close']
+
+            if next_golden_idx + 5 < len(df):
+                five_day_increase = (df.iloc[next_golden_idx + 5]['close'] - buy_price) / buy_price * 100
+            if next_golden_idx + 10 < len(df):
+                ten_day_increase = (df.iloc[next_golden_idx + 10]['close'] - buy_price) / buy_price * 100
+            if next_golden_idx + 20 < len(df):
+                twenty_day_increase = (df.iloc[next_golden_idx + 20]['close'] - buy_price) / buy_price * 100
+
+            if five_day_increase is not None and five_day_increase > 0:
+                successful_cases += 1
+                success = True
+
+            matches.append({
+                'code': stock_code,
+                'name': stock_name,
+                'market': market,
+                'golden_cross_date': df.iloc[golden_cross_idx]['date'].strftime('%Y-%m-%d'),
+                'death_cross_date': df.iloc[death_cross_idx]['date'].strftime('%Y-%m-%d'),
+                'rejuvenation_date': df.iloc[next_golden_idx]['date'].strftime('%Y-%m-%d'),
+                'gain_gc_to_dc': round(gain_pct, 2),
+                'macd_at_rejuvenation': round(macd_at_gc, 4),
+                'buy_price': buy_price,
+                '5_day_increase': round(five_day_increase, 2) if five_day_increase is not None else None,
+                '10_day_increase': round(ten_day_increase, 2) if ten_day_increase is not None else None,
+                '20_day_increase': round(twenty_day_increase, 2) if twenty_day_increase is not None else None,
+                'result': '成功' if success else '失败'
+            })
+
+            golden_cross_idx = None
+
+    return {
+        'matches': matches,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases
+    }
+
+
+def validate_macd_rejuvenation(stock_service, start_date=None, end_date=None, stock_codes=None):
+    """验证回春战法
+
+    在指定时间段内扫描所有股票，寻找符合回春战法条件的股票。
+
+    Args:
+        stock_service: StockService实例
+        start_date: 开始日期，格式为"YYYY-MM-DD"
+        end_date: 结束日期，格式为"YYYY-MM-DD"
+        stock_codes: 股票代码列表，为None时验证所有股票
+
+    Returns:
+        dict: 包含匹配股票和策略准确率的结果
+    """
+    if stock_codes is None:
+        stocks = stock_service.get_all_a_stocks_from_db()
+        logger.info(f"获取到 {len(stocks)} 只A股股票")
+    else:
+        stocks = stock_codes
+
+    matching_stocks = []
+    total_cases = 0
+    successful_cases = 0
+
+    max_workers = 400
+    logger.info(f"使用 {max_workers} 个线程进行并行处理")
+
+    processed_count = 0
+
+    def process_stock_rejuvenation(stock_code: str) -> Optional[dict]:
+        try:
+            stock_name = ""
+            market = ""
+            company = stock_service.get_stock_company_by_code(stock_code)
+            if company:
+                stock_name = company.get('sec_name', '')
+                market = company.get('market', '')
+
+            stock_code_str = str(stock_code)
+            if not (stock_code_str.startswith('600') or stock_code_str.startswith('601') or
+                    stock_code_str.startswith('603') or stock_code_str.startswith('605') or
+                    stock_code_str.startswith('000')):
+                return None
+
+            k_data = stock_service.load_stock_data(stock_code)
+            if k_data is None:
+                return None
+
+            # 过滤日期范围
+            if start_date and end_date:
+                start_date_dt = pd.to_datetime(start_date)
+                end_date_dt = pd.to_datetime(end_date)
+                filtered_data = k_data[(k_data['date'] >= start_date_dt) & (k_data['date'] <= end_date_dt)]
+            else:
+                filtered_data = k_data
+
+            strategy_result = macd_rejuvenation_strategy(filtered_data, stock_code, stock_name, market)
+
+            if strategy_result and strategy_result['matches']:
+                for match in strategy_result['matches']:
+                    logger.info(
+                        f"  - 回春战法: {stock_code} {stock_name}, "
+                        f"金叉→死叉涨幅: {match['gain_gc_to_dc']}%, "
+                        f"回春日: {match['rejuvenation_date']}, "
+                        f"5日涨幅: {match.get('5_day_increase', 'N/A')}%"
+                    )
+
+            return strategy_result
+        except Exception as e:
+            logger.error(f"处理股票 {stock_code} 时发生错误: {type(e).__name__}: {str(e)}")
+            return None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_stock_rejuvenation, stock): stock for stock in stocks}
+
+        for future in as_completed(futures):
+            result = future.result()
+            processed_count += 1
+
+            if result:
+                matching_stocks.extend(result['matches'])
+                total_cases += result['total_cases']
+                successful_cases += result['successful_cases']
+
+    accuracy = (successful_cases / total_cases * 100) if total_cases > 0 else 0
+    logger.info(f"回春战法验证完成")
+    logger.info(f"总案例数: {total_cases}")
+    logger.info(f"成功案例数: {successful_cases}")
+    logger.info(f"策略准确率: {accuracy:.2f}%")
+    logger.info(f"找到 {len(matching_stocks)} 个匹配模式")
+
+    return {
+        'matching_stocks': matching_stocks,
+        'total_cases': total_cases,
+        'successful_cases': successful_cases,
+        'accuracy': accuracy
     }

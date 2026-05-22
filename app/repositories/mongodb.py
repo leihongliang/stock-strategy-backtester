@@ -129,8 +129,9 @@ class MongoDBRepository:
                     # 如果是字符串，尝试转换为datetime对象
                     try:
                         trade_date = datetime.fromisoformat(trade_date)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.error(f"股票 {sec_code} 的日期格式转换失败: trade_date={trade_date}, 错误: {e}")
+                        continue
                 result.append((trade_date, doc['open'], doc['high'], doc['low'], doc['close'], doc['volume'], doc['amount']))
             
             # 按日期排序
