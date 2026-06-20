@@ -41,3 +41,27 @@
 3. 记录仍然损坏或未验证的内容
 4. 在仓库可安全恢复后提交
 5. 给下一轮会话留下干净的重启路径
+
+## 代码规范
+
+### 类型注解
+
+所有函数必须指定参数类型和返回类型：
+
+```python
+def get_daily_k_data(self, stock_code: str, start_date: str, end_date: str, data_source: str = "akshare") -> tuple[str, DataFrame | None]:
+    ...
+
+def save_stock_companies(self, companies: list[StockCompany]) -> bool:
+    ...
+
+def get_stock_company_by_code(self, stock_code: str) -> dict | StockCompany | None:
+    ...
+```
+
+规则：
+- 入参必须标注类型
+- 返回值必须标注类型
+- 可选参数使用默认值 `None` 时，类型写成 `Xxx | None`
+- 集合类型使用 `list[X]`、`dict[K, V]`
+- `Optional[X]` 统一写成 `X | None`

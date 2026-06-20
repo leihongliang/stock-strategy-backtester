@@ -612,6 +612,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pandas-stubs"
+version = "3.0.3.260530"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/3d/aa/c41a8a0ff86fd85dbb3ec0c1f3fa488ca64a8b5f82654ae1b07d84acefe5/pandas_stubs-3.0.3.260530.tar.gz", hash = "sha256:d1efe47b2e5a312c047d7feabec5cb7a55365747983420077e9fcbe9ab74f714", size = 113183, upload-time = "2026-05-30T17:47:40.34Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0b/e0/99ec5b02203c4e9ce878bc63d8caa06ac1f891e4d63bded9a5ced70fcb4f/pandas_stubs-3.0.3.260530-py3-none-any.whl", hash = "sha256:a6277eb1c8cebf48d9b2413fcd2e9a6b4ff479c934a223c29eacbc3058c4cb55", size = 173780, upload-time = "2026-05-30T17:47:39.13Z" },
+]
+
+[[package]]
 name = "py-mini-racer"
 version = "0.6.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -899,6 +911,7 @@ dependencies = [
     { name = "coloredlogs" },
     { name = "fastapi" },
     { name = "pandas" },
+    { name = "pandas-stubs" },
     { name = "pymongo" },
     { name = "rich" },
     { name = "tushare" },
@@ -911,6 +924,7 @@ requires-dist = [
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "fastapi", specifier = ">=0.135.3" },
     { name = "pandas", specifier = ">=3.0.1" },
+    { name = "pandas-stubs", specifier = "~=3.0.1" },
     { name = "pymongo", specifier = ">=4.16.0" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "tushare", specifier = ">=1.4.29" },

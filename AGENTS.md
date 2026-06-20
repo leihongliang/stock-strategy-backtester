@@ -48,3 +48,27 @@
 3. 记录仍未解决的风险或 blocker
 4. 在工作处于安全状态后，用清晰的提交信息提交
 5. 保证下一轮会话可以直接运行 `./init.sh`
+
+## 代码规范
+
+### 类型注解
+
+所有函数必须指定参数类型和返回类型：
+
+```python
+def get_daily_k_data(self, stock_code: str, start_date: str, end_date: str, data_source: str = "akshare") -> tuple[str, DataFrame | None]:
+    ...
+
+def save_stock_companies(self, companies: list[StockCompany]) -> bool:
+    ...
+
+def get_stock_company_by_code(self, stock_code: str) -> dict | StockCompany | None:
+    ...
+```
+
+规则：
+- 入参必须标注类型
+- 返回值必须标注类型
+- 可选参数使用默认值 `None` 时，类型写成 `Xxx | None`
+- 集合类型使用 `list[X]`、`dict[K, V]`
+- `Optional[X]` 统一写成 `X | None`

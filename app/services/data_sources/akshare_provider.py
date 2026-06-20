@@ -6,18 +6,15 @@ import datetime
 
 from pandas import DataFrame
 
-from app.models.company import StockCompany
-from app.models.stock import StockDailyPrice
-
 
 class AkShareProvider:
     """AkShare数据源提供者
     
-    负责从AkShare获取股票数据。
+    负责从AkShare获取股票、基金、指数行情数据。
     """
     
     @staticmethod
-    def get_daily_k_data(stock_code, start_date, end_date) -> DataFrame | None:
+    def get_daily_k_data(stock_code: str, start_date: str, end_date: str) -> DataFrame | None:
         """获取股票日K线数据
         
         从AkShare获取指定股票的日K线数据。
@@ -28,108 +25,115 @@ class AkShareProvider:
             end_date: 结束日期，格式为"YYYYMMDD"
             
         Returns:
-            tuple: (stock_code, k_data)，其中k_data为获取的K线数据
+            DataFrame: K线数据
         """
         try:
-            # 禁用所有代理，避免VPN或系统代理导致的连接问题
-            # os.environ['no_proxy'] = '*'
-            # os.environ['HTTP_PROXY'] = ''
-            # os.environ['HTTPS_PROXY'] = ''
-            # os.environ['http_proxy'] = ''
-            # os.environ['https_proxy'] = ''
-            
-            # 添加重试机制，增加等待时间
             for i in range(3):
                 try:
                     print(f"尝试从AkShare获取{stock_code}日K线数据 (尝试 {i+1}/3)...")
                     k_data = ak.stock_zh_a_hist(symbol=stock_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
                     print(f"从AkShare获取{stock_code}日K线数据成功，共 {len(k_data)} 条记录")
-                    # 成功后增加等待时间，降低请求频率
                     time.sleep(3)
                     return k_data
                 except Exception as e:
                     print(f"从AkShare获取{stock_code}日K线数据失败 (尝试 {i+1}/3): {e}")
-                    # 增加等待时间，避免频繁请求
                     time.sleep(5 * (i + 1))
             print(f"从AkShare获取{stock_code}日K线数据失败，已达到最大重试次数")
             return None
         except Exception as e:
             print(f"从AkShare获取{stock_code}日K线数据失败: {e}")
             return None
-
+    
     @staticmethod
-    def get_all_a_stocks() -> list[StockCompany]:
-        """Get all A-share stocks information"""
-        company_list = []
+    def get_index_daily_k_data(index_code: str, start_date: str | None = None, end_date: str | None = None) -> DataFrame | None:
+        """获取指数日K线数据
         
-        # Process Shanghai stocks
+        从AkShare(新浪)获取指定指数的日K线数据。
+        
+        Args:
+            index_code: 指数代码，如"000905"(中证500)，会自动添加市场前缀
+            start_date: 开始日期，格式为"YYYYMMDD"（可选）
+            end_date: 结束日期，格式为"YYYYMMDD"（可选）
+            
+        Returns:
+            DataFrame: K线数据
+        """
         try:
-            stock_info_sh = ak.stock_info_sh_name_code()
-            for _, row in stock_info_sh.iterrows():
-                # Get stock code
-                sec_code = str(row.get('证券代码', ''))
-                if not sec_code:
-                    continue
-                # 确保股票代码为6位字符串
-                sec_code = sec_code.zfill(6)
-                
-                # Get stock name
-                sec_name = row.get('证券简称', '')
-                
-                # Get market
-                market = 'SH'
-
-                # Get industry
-                industry = row.get('所属行业', '')
-                
-                # Get listing date
-                listing_date_value = row.get('上市日期')
-                listing_date = pd.to_datetime(listing_date_value).date()
-                
-                # Create StockCompany object
-                company = StockCompany(
-                    sec_code=sec_code,
-                    sec_name=sec_name,
-                    market=market,
-                    industry=industry,
-                    listing_date=listing_date
-                )
-                company_list.append(company)
+            # 添加市场前缀
+            if not index_code.startswith(('sh', 'sz')):
+                if index_code.startswith(('000', '880', '9')):
+                    index_code = f'sh{index_code}'
+                else:
+                    index_code = f'sz{index_code}'
+            
+            for i in range(3):
+                try:
+                    print(f"尝试从AkShare获取{index_code}指数日K线数据 (尝试 {i+1}/3)...")
+                    k_data = ak.stock_zh_index_daily(symbol=index_code)
+                    print(f"从AkShare获取{index_code}指数日K线数据成功，共 {len(k_data)} 条记录")
+                    
+                    # 如果指定了日期范围，进行过滤
+                    if start_date or end_date:
+                        k_data['date'] = pd.to_datetime(k_data['date'])
+                        if start_date:
+                            k_data = k_data[k_data['date'] >= pd.to_datetime(start_date)]
+                        if end_date:
+                            k_data = k_data[k_data['date'] <= pd.to_datetime(end_date)]
+                    
+                    time.sleep(3)
+                    return k_data
+                except Exception as e:
+                    print(f"从AkShare获取{index_code}指数日K线数据失败 (尝试 {i+1}/3): {e}")
+                    time.sleep(5 * (i + 1))
+            print(f"从AkShare获取{index_code}指数日K线数据失败，已达到最大重试次数")
+            return None
         except Exception as e:
-            print(f"处理上海股票数据失败: {e}")
+            print(f"从AkShare获取{index_code}指数日K线数据失败: {e}")
+            return None
+    
+    @staticmethod
+    def get_etf_daily_k_data(etf_code: str, start_date: str | None = None, end_date: str | None = None) -> DataFrame | None:
+        """获取ETF日K线数据
         
-        # Process Shenzhen stocks
+        从AkShare(新浪)获取指定ETF的日K线数据。
+        
+        Args:
+            etf_code: ETF代码，如"510500"(中证500ETF)，会自动添加市场前缀
+            start_date: 开始日期，格式为"YYYYMMDD"（可选）
+            end_date: 结束日期，格式为"YYYYMMDD"（可选）
+            
+        Returns:
+            DataFrame: K线数据
+        """
         try:
-            stock_info_sz = ak.stock_info_sz_name_code()
-            for _, row in stock_info_sz.iterrows():
-                # Get stock code
-                sec_code = str(row.get('A股代码', ''))
-                if not sec_code:
-                    continue
-                # 确保股票代码为6位字符串
-                sec_code = sec_code.zfill(6)
-                
-                # Get stock name
-                sec_name = row.get('A股简称', '')
-                market = 'SZ'
-                
-                # Get industry
-                industry = row.get('所属行业', '')
-                
-                # Get listing date
-                listing_date_value = row.get('A股上市日期', '')
-                listing_date = pd.to_datetime(listing_date_value).date()
-                
-                # Create StockCompany object
-                company = StockCompany(
-                    sec_code=sec_code,
-                    sec_name=sec_name,
-                    market=market,
-                    industry=industry,
-                    listing_date=listing_date
-                )
-                company_list.append(company)
+            # 添加市场前缀
+            if not etf_code.startswith(('sh', 'sz')):
+                if etf_code.startswith(('50', '51', '58')):
+                    etf_code = f'sh{etf_code}'
+                else:
+                    etf_code = f'sz{etf_code}'
+            
+            for i in range(3):
+                try:
+                    print(f"尝试从AkShare获取{etf_code} ETF日K线数据 (尝试 {i+1}/3)...")
+                    k_data = ak.fund_etf_hist_sina(symbol=etf_code)
+                    print(f"从AkShare获取{etf_code} ETF日K线数据成功，共 {len(k_data)} 条记录")
+                    
+                    # 如果指定了日期范围，进行过滤
+                    if start_date or end_date:
+                        k_data['date'] = pd.to_datetime(k_data['date'])
+                        if start_date:
+                            k_data = k_data[k_data['date'] >= pd.to_datetime(start_date)]
+                        if end_date:
+                            k_data = k_data[k_data['date'] <= pd.to_datetime(end_date)]
+                    
+                    time.sleep(3)
+                    return k_data
+                except Exception as e:
+                    print(f"从AkShare获取{etf_code} ETF日K线数据失败 (尝试 {i+1}/3): {e}")
+                    time.sleep(5 * (i + 1))
+            print(f"从AkShare获取{etf_code} ETF日K线数据失败，已达到最大重试次数")
+            return None
         except Exception as e:
-            print(f"处理深圳股票数据失败: {e}")
-        
-        return company_list
+            print(f"从AkShare获取{etf_code} ETF日K线数据失败: {e}")
+            return None

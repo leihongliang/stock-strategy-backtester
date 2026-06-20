@@ -1136,7 +1136,7 @@ def macd_rejuvenation_strategy(filtered_data, stock_code, stock_name, market):
                     has_next_golden = True
                     next_golden_date = df.iloc[j]['date'].strftime('%Y-%m-%d')
                     # 计算金叉是否在零轴附近
-                    macd_at_gc = df.iloc[j]['macd']
+                    macd_ffat_gc = df.iloc[j]['macd']
                     macd_value = round(macd_at_gc, 4)
                     recent_range = df.iloc[max(0, death_cross_idx - 20):death_cross_idx + 1]['macd'].max() - \
                                    df.iloc[max(0, death_cross_idx - 20):death_cross_idx + 1]['macd'].min()

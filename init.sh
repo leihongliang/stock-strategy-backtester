@@ -10,6 +10,10 @@ VERIFY_CMD=(python -c "from app.main import app; print('FastAPI app loaded OK')"
 START_CMD=(python run.py)
 
 echo "==> 当前目录: $PWD"
+
+echo "==> 启动 MongoDB"
+brew services start mongodb-community@8.0
+
 echo "==> 同步依赖"
 "${INSTALL_CMD[@]}"
 

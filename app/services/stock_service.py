@@ -1,4 +1,5 @@
 import pandas as pd
+from pandas import DataFrame
 import time
 from datetime import datetime, date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +10,8 @@ from app.models.company import StockCompany
 from app.models.trade_calendar import TradeCalendar
 from app.services.data_sources.akshare_provider import AkShareProvider
 from app.services.data_sources.tushare_provider import TushareProvider
+from app.services.stock_company_service import StockCompanyService
+from app.services.trade_calendar_service import TradeCalendarService
 from app.config.settings import settings
 from app.utils.log import logger
 from app.services.strategies import validate_strategy
@@ -25,125 +28,119 @@ class StockService:
             port=settings.MONGODB_PORT,
             database=settings.MONGODB_DATABASE
         )
+        self.stock_company_service = StockCompanyService()
+        self.trade_calendar_service = TradeCalendarService()
         logger.info("使用MongoDB作为数据库")
-    
-    def get_all_a_stocks(self, data_source="akshare") -> list[StockCompany]:
-        """获取所有A股股票列表
+
+    def get_all_funds(self) -> list[StockCompany]:
+        """获取所有基金列表"""
+        return self.stock_company_service.get_all_funds()
+
+    def get_daily_k_data(self, stock_code: str, start_date: str, end_date: str, data_source: str = "akshare") -> tuple[str, DataFrame | None]:
+        """获取证券日K线数据
         
-        从AkShare获取上海和深圳交易所的A股股票列表。
-        """
-        try:
-            if data_source == "akshare":
-                return AkShareProvider.get_all_a_stocks()
-        except Exception as e:
-            logger.error(f"获取A股公司数据失败: {e}")
-            return []
-    
-    def get_daily_k_data(self, stock_code, start_date, end_date, data_source="akshare") -> tuple:
-        """获取股票日K线数据
-        
-        从指定数据源获取指定股票的日K线数据。
+        自动查询数据库判断证券类型，选择对应的数据源。
         
         Args:
-            stock_code: 股票代码
+            stock_code: 证券代码
             start_date: 开始日期，格式为"YYYYMMDD"
             end_date: 结束日期，格式为"YYYYMMDD"
-            data_source: 数据源，可选值为"akshare"或"tushare"
+            data_source: 数据源，可选值为"akshare"或"tushare"（仅对股票有效）
             
         Returns:
-            tuple: (stock_code, k_data)，其中k_data为获取的K线数据
+            tuple: (stock_code, k_data)
         """
         try:
-            if data_source == "tushare":
-                # 从tushare获取数据
+            # 查询数据库获取证券类型
+            sec_type = "stock"
+            company = self.stock_company_service.get_stock_company_by_code(stock_code)
+            if company:
+                if isinstance(company, dict):
+                    sec_type = company.get('sec_type', 'stock')
+                else:
+                    sec_type = getattr(company, 'sec_type', 'stock')
+                    if hasattr(sec_type, 'value'):
+                        sec_type = sec_type.value
+            
+            if sec_type == "index":
+                k_data = AkShareProvider.get_index_daily_k_data(stock_code, start_date, end_date)
+            elif sec_type == "fund":
+                k_data = AkShareProvider.get_etf_daily_k_data(stock_code, start_date, end_date)
+            elif data_source == "tushare":
                 k_data = TushareProvider.get_daily_k_data(stock_code, start_date, end_date)
-                return stock_code, k_data
             else:
-                # 从akshare获取数据
                 k_data = AkShareProvider.get_daily_k_data(stock_code, start_date, end_date)
-                return stock_code, k_data
+            return stock_code, k_data
         except Exception as e:
             logger.error(f"获取{stock_code}日K线数据失败: {e}")
             return stock_code, None
     
-    def get_daily_k_data_batch(self, stock_codes, start_date, end_date, data_source="akshare") -> list[StockDailyPrice]:
-        """批量获取股票日K线数据
-        
-        从指定数据源批量获取多只股票的日K线数据。
-        对于Tushare数据源，会将股票代码用逗号分隔，一次性获取多只股票的数据。
-        对于AkShare数据源，会循环获取每只股票的数据。
+    def get_daily_k_data_batch(self, stock_codes: list[str], start_date: str, end_date: str, data_source: str = "akshare") -> list[StockDailyPrice]:
+        """批量获取证券日K线数据
         
         Args:
-            stock_codes: 股票代码列表
+            stock_codes: 证券代码列表
             start_date: 开始日期，格式为"YYYYMMDD"
             end_date: 结束日期，格式为"YYYYMMDD"
-            data_source: 数据源，可选值为"akshare"或"tushare"
+            data_source: 数据源（仅对股票有效）
             
         Returns:
-            list[StockDailyPrice]: 所有股票的日K线数据列表
+            list[StockDailyPrice]: 所有证券的日K线数据列表
         """
         try:
-            if data_source == "tushare":
-                # 从tushare批量获取数据
-                return TushareProvider.get_daily_k_data_batch(stock_codes, start_date, end_date)
-            else:
-                # 从akshare循环获取数据
-                all_data = []
-                for stock_code in stock_codes:
-                    data = AkShareProvider.get_daily_k_data(stock_code, start_date, end_date)
-                    if data is not None and not data.empty:
-                        # 计算昨收价、涨跌额和涨跌幅
-                        data['pre_close'] = data['close'].shift(1)
-                        data['pre_close'].fillna(data['open'].iloc[0], inplace=True)
-                        data['change'] = data['close'] - data['pre_close']
-                        data['pct_chg'] = (data['change'] / data['pre_close']) * 100
+            all_data = []
+            for stock_code in stock_codes:
+                _, data = self.get_daily_k_data(stock_code, start_date, end_date, data_source)
+                
+                if data is not None and not data.empty:
+                    # 计算昨收价、涨跌额和涨跌幅
+                    data['pre_close'] = data['close'].shift(1)
+                    data['pre_close'].fillna(data['open'].iloc[0], inplace=True)
+                    data['change'] = data['close'] - data['pre_close']
+                    data['pct_chg'] = (data['change'] / data['pre_close']) * 100
+                    
+                    # 移除股票代码前缀，保持为字符串
+                    sec_code = stock_code.replace('SH', '').replace('SZ', '').replace('sh', '').replace('sz', '')
+                    sec_code = sec_code.zfill(6)
+                    
+                    for _, row in data.iterrows():
+                        open_price = int(float(row['open']) * 100)
+                        high_price = int(float(row['high']) * 100)
+                        low_price = int(float(row['low']) * 100)
+                        close_price = int(float(row['close']) * 100)
                         
-                        # 移除股票代码前缀，保持为字符串
-                        sec_code = stock_code.replace('SH', '').replace('SZ', '')
-                        # 确保股票代码为6位字符串
-                        sec_code = sec_code.zfill(6)
+                        pre_close = int(float(row['pre_close']) * 100)
+                        change = int(float(row['change']) * 100)
+                        pct_chg = int(float(row['pct_chg']) * 100)
                         
-                        for _, row in data.iterrows():
-                            # 将价格乘以100转换为整数
-                            open_price = int(float(row['open']) * 100)
-                            high_price = int(float(row['high']) * 100)
-                            low_price = int(float(row['low']) * 100)
-                            close_price = int(float(row['close']) * 100)
-                            
-                            pre_close = int(float(row['pre_close']) * 100)
-                            change = int(float(row['change']) * 100)
-                            pct_chg = int(float(row['pct_chg']) * 100)
-                            
-                            volume = int(row['volume'])
-                            amount = int(row['amount'])
-                            
-                            # 其他字段使用默认值
-                            adjfactor = 10000  # 默认调整因子
-                            st_status = 0  # 非ST
-                            trade_status = 1  # 正常交易
-                            
-                            # 创建StockDailyPrice对象
-                            stock_price = StockDailyPrice(
-                                trade_date=pd.to_datetime(row['date']).date(),
-                                sec_code=sec_code,
-                                open=open_price,
-                                high=high_price,
-                                low=low_price,
-                                close=close_price,
-                                pre_close=pre_close,
-                                change=change,
-                                pct_chg=pct_chg,
-                                volume=volume,
-                                amount=amount,
-                                adjfactor=adjfactor,
-                                st_status=st_status,
-                                trade_status=trade_status
-                            )
-                            
-                            all_data.append(stock_price)
-                return all_data
+                        volume = int(row['volume'])
+                        amount = int(row['amount'])
+                        
+                        adjfactor = 10000
+                        st_status = 0
+                        trade_status = 1
+                        
+                        stock_price = StockDailyPrice(
+                            trade_date=pd.to_datetime(row['date']).date(),
+                            sec_code=sec_code,
+                            open=open_price,
+                            high=high_price,
+                            low=low_price,
+                            close=close_price,
+                            pre_close=pre_close,
+                            change=change,
+                            pct_chg=pct_chg,
+                            volume=volume,
+                            amount=amount,
+                            adjfactor=adjfactor,
+                            st_status=st_status,
+                            trade_status=trade_status
+                        )
+                        
+                        all_data.append(stock_price)
+            return all_data
         except Exception as e:
-            logger.error(f"批量获取股票日K线数据失败: {e}")
+            logger.error(f"批量获取证券日K线数据失败: {e}")
             return []
 
 
@@ -204,100 +201,17 @@ class StockService:
 
         return k_data
 
-    def save_stock_companies(self):
-        """获取当天A股公司信息并保存到数据库
-        
-        从数据库读取所有A股公司的基本信息，然后进行全量更新，
-        保存到数据库的stock_company集合中。
-        如果数据库中没有数据，则从外部数据源获取并保存。
-        """
-        
-        # 从数据库获取所有A股公司信息
-        all_stocks = self.get_stock_companies_from_db()
-        logger.info(f"从数据库获取到 {len(all_stocks)} 只A股股票")
-        
-        # 保存公司数据到数据库（全量更新）
-        if all_stocks:
-            # 转换为StockCompany对象列表
-            stock_company_objects = []
-            for stock in all_stocks:
-                # 处理字典类型的数据
-                if isinstance(stock, dict):
-                    # 确保日期格式正确
-                    listing_date = stock.get('listing_date')
-                    if isinstance(listing_date, str):
-                        listing_date = pd.to_datetime(listing_date).date()
-                    elif isinstance(listing_date, datetime):
-                        listing_date = listing_date.date()
-                
-                    # 创建StockCompany对象
-                    stock_company = StockCompany(
-                        sec_code=str(stock.get('sec_code')),
-                        sec_name=stock.get('sec_name'),
-                        market=stock.get('market'),
-                        industry=stock.get('industry'),
-                        listing_date=listing_date
-                    )
-                    stock_company_objects.append(stock_company)
-            
-            # 保存到数据库
-            if stock_company_objects:
-                success = self.repo.save_stock_companies(stock_company_objects)
-                if success:
-                    logger.info(f"成功更新 {len(stock_company_objects)} 家A股公司信息")
-                    return True
-                else:
-                    logger.error("保存A股公司信息失败")
-                    return False
-            else:
-                logger.error("没有有效的公司信息可以更新")
-                return False
-        else:
-            # 第一次写入场景，从外部数据源获取数据
-            logger.info("数据库中暂无A股公司信息，从外部数据源获取")
-            all_stocks = self.get_all_a_stocks()
-            logger.info(f"从外部数据源获取到 {len(all_stocks)} 只A股股票")
-            
-            # 保存到数据库
-            if all_stocks:
-                success = self.repo.save_stock_companies(all_stocks)
-                if success:
-                    logger.info(f"成功保存 {len(all_stocks)} 家A股公司信息（第一次写入）")
-                    return True
-                else:
-                    logger.error("保存A股公司信息失败")
-                    return False
-            else:
-                logger.error("从外部数据源获取A股公司信息失败")
-                return False
+    def save_stock_companies(self) -> bool:
+        """全量更新A股公司信息到数据库"""
+        return self.stock_company_service.save_all_stock_companies()
     
-    def get_stock_companies_from_db(self):
-        """从数据库获取所有A股公司信息
-        
-        Returns:
-            list: A股公司信息列表
-        """
-        try:
-            return self.repo.get_stock_companies()
-        except Exception as e:
-            logger.error(f"从数据库获取A股公司信息失败: {e}")
-            return []
+    def get_stock_companies_from_db(self) -> list:
+        """从数据库获取所有公司信息"""
+        return self.stock_company_service.get_stock_companies_from_db()
     
-    def get_stock_company_by_code(self, stock_code):
-        """根据股票代码从数据库获取股票公司信息
-        
-        Args:
-            stock_code: 股票代码
-            
-        Returns:
-            dict or object: 股票公司信息，如果不存在则返回None
-        """
-        try:
-            # 直接从数据库根据股票代码查询
-            return self.repo.get_stock_company_by_code(stock_code)
-        except Exception as e:
-            logger.error(f"根据股票代码获取公司信息失败: {e}")
-            return None
+    def get_stock_company_by_code(self, stock_code: str) -> dict | StockCompany | None:
+        """根据股票代码从数据库获取公司信息"""
+        return self.stock_company_service.get_stock_company_by_code(stock_code)
     
     def get_all_a_stocks_from_db(self):
         """从数据库的stock_daily_price表获取所有A股股票列表
@@ -311,7 +225,7 @@ class StockService:
             logger.error(f"从数据库获取A股股票列表失败: {e}")
             return []
     
-    def sync_stock_data_in_range(self, start_date, end_date, stock_codes=None, data_source="tushare"):
+    def sync_stock_data_in_range(self, start_date: str, end_date: str, stock_codes: list[str] | None = None, data_source: str = "tushare") -> dict:
         """同步固定时间范围内的股票数据到数据库
         
         从数据库获取股票列表，然后按天同步指定时间范围内的股票数据。
@@ -327,11 +241,13 @@ class StockService:
             dict: 同步结果
         """
 
+        # 确保所有指定的股票代码都存在于数据库中
+        if stock_codes:
+            self.stock_company_service.ensure_stocks_exist(stock_codes)
+        
         # 从数据库获取股票列表
-        stock_companies = self.get_stock_companies_from_db()
-        if not stock_companies:
-            logger.error("从数据库获取股票列表失败")
-            return {"message": "从数据库获取股票列表失败", "success": False}
+        stock_companies = self.stock_company_service.get_stock_companies_from_db()
+        logger.info(f"从数据库获取到 {len(stock_companies)} 只A股股票")
         
         # 筛选股票代码
         stocks_to_sync = []
@@ -359,40 +275,8 @@ class StockService:
         
         logger.info(f"开始同步 {len(stocks_to_sync)} 只股票的数据，时间范围: {start_date} 至 {end_date}")
         
-        # 获取交易日历数据
-        trade_calendar_data = self.repo.get_trade_calendar()
-        if not trade_calendar_data:
-            logger.error("获取交易日历数据失败，无法确定交易日")
-            return {"message": "获取交易日历数据失败", "success": False}
-        
-        # 生成日期范围
-        try:
-            start_dt = datetime.strptime(start_date, "%Y%m%d")
-            end_dt = datetime.strptime(end_date, "%Y%m%d")
-            start_date_obj = start_dt.date()
-            end_date_obj = end_dt.date()
-        except Exception as e:
-            logger.error(f"日期格式错误: {e}")
-            return {"message": "日期格式错误", "success": False}
-        
-        # 过滤出指定范围内的交易日
-        trading_days = []
-        for item in trade_calendar_data:
-            trade_date = item['trade_date']
-            # 处理datetime类型的trade_date
-            if hasattr(trade_date, 'date'):
-                trade_date = trade_date.date()
-            # 兼容处理字符串类型的trade_date（用于旧数据）
-            elif isinstance(trade_date, str):
-                trade_date = date.fromisoformat(trade_date)
-            
-            if (trade_date >= start_date_obj and 
-                trade_date <= end_date_obj and 
-                item['is_trading_day']):
-                trading_days.append(trade_date)
-        
-        # 排序交易日
-        trading_days.sort()
+        # 获取交易日
+        trading_days = self.trade_calendar_service.get_trading_days(start_date, end_date)
         
         # 检查是否有交易日
         if not trading_days:
@@ -509,90 +393,11 @@ class StockService:
             "total_records": total_records
         }
     
-    def sync_trade_calendar(self, start_date=None, end_date=None):
-        """同步交易日历数据到数据库
-        
-        从AkShare获取A股交易日历数据，并保存到数据库。
-        只同步数据库中不存在的新数据。
-        
-        Args:
-            start_date (date, optional): 开始日期. Defaults to None (使用当天日期).
-            end_date (date, optional): 结束日期. Defaults to None (使用当年年末).
-        """
-
-        try:
-            logger.info("开始从AkShare获取交易日历数据")
-            
-            # 获取数据库中最新和最早的交易日日期
-            latest_db_date = self.repo.get_latest_trade_date()
-            earliest_db_date = self.repo.get_earliest_trade_date()
-            
-            # 定义日期范围
-            if start_date is None:
-                start_date = date.today()  # 默认开始日期为当天
-            if end_date is None:
-                end_date = date(date.today().year, 12, 31)  # 默认结束日期为当年年末
-            
-            # 检查数据库中是否已有该范围内的数据
-            if earliest_db_date and latest_db_date:
-                logger.info(f"数据库中最早的交易日日期: {earliest_db_date}")
-                logger.info(f"数据库中最新的交易日日期: {latest_db_date}")
-                
-                # 如果数据库中已有完整的指定范围数据，则无需同步
-                if start_date >= earliest_db_date and end_date <= latest_db_date:
-                    logger.info("数据库中已有指定范围内的完整数据，无需同步")
-                    return
-                # 如果数据库有部分数据，则从最新日期的下一天开始同步
-                elif end_date > latest_db_date:
-                    logger.info("数据库中有部分数据，从最新日期的下一天开始同步")
-                    start_date = latest_db_date + timedelta(days=1)
-                    if start_date > end_date:
-                        logger.info("数据库数据已经是最新的，无需同步")
-                        return
-            else:
-                logger.info("数据库中没有交易日历数据，将同步指定范围的完整数据")
-            
-            # 存储所有数据
-            all_trade_dates = set()
-            trade_calendar_list = []
-            
-            # 从AkShare获取完整的交易日历数据
-            tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
-            logger.info(f"从AkShare获取完整交易日历数据成功，共 {len(tool_trade_date_hist_sina_df)} 条记录")
-            
-            # 转换日期格式
-            tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date']).dt.date
-            
-            # 过滤出需要同步的新数据
-            new_data_df = tool_trade_date_hist_sina_df[(tool_trade_date_hist_sina_df['trade_date'] >= start_date) & (tool_trade_date_hist_sina_df['trade_date'] <= end_date)]
-            logger.info(f"需要同步的新数据: {len(new_data_df)} 条记录")
-            
-            # 直接处理所有数据
-            for _, row in new_data_df.iterrows():
-                trade_date = row['trade_date']
-                all_trade_dates.add(trade_date)
-                is_trading_day = bool(row['is_trading_day']) if 'is_trading_day' in row else True
-                
-                trade_calendar = TradeCalendar(
-                    trade_date=trade_date,
-                    is_trading_day=is_trading_day
-                )
-                trade_calendar_list.append(trade_calendar)
-
-            # 保存到数据库
-            if trade_calendar_list:
-                success = self.repo.save_trade_calendar(trade_calendar_list)
-                if success:
-                    logger.info(f"成功保存 {len(trade_calendar_list)} 条交易日历数据")
-                else:
-                    logger.error("保存交易日历数据失败")
-            else:
-                logger.info("没有需要同步的新数据")
-                
-        except Exception as e:
-            logger.error(f"同步交易日历数据失败: {e}")
+    def sync_trade_calendar(self, start_date: date | None = None, end_date: date | None = None) -> None:
+        """同步交易日历数据到数据库"""
+        self.trade_calendar_service.sync_trade_calendar(start_date, end_date)
     
-    def validate_strategy(self, strategy_name, start_date=None, end_date=None):
+    def validate_strategy(self, strategy_name: str, start_date: str | None = None, end_date: str | None = None) -> dict:
         """根据策略从历史数据中找到符合的股票及其时间段区间，并验证之后几天的股票涨幅，计算策略的正确率
         
         Args:
@@ -606,7 +411,7 @@ class StockService:
 
         return validate_strategy(self, strategy_name, start_date, end_date)
     
-    def daily_update(self):
+    def daily_update(self) -> dict:
         """每日更新股票数据
         
         执行以下操作：
