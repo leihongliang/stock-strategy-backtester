@@ -125,9 +125,14 @@ class TradeCalendarService:
             trade_calendar_list = []
             
             tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
-            logger.info(f"从AkShare获取完整交易日历数据成功，共 {len(tool_trade_date_hist_sina_df)} 条记录")
+            logger.info(
+                f"从AkShare获取完整交易日历数据成功，"
+                f"共 {len(tool_trade_date_hist_sina_df)} 条记录"
+            )
             
-            tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date']).dt.date
+            tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(
+                tool_trade_date_hist_sina_df['trade_date']
+            ).dt.date
             
             new_data_df = tool_trade_date_hist_sina_df[
                 (tool_trade_date_hist_sina_df['trade_date'] >= start_date) & 

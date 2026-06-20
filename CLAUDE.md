@@ -65,3 +65,8 @@ def get_stock_company_by_code(self, stock_code: str) -> dict | StockCompany | No
 - 可选参数使用默认值 `None` 时，类型写成 `Xxx | None`
 - 集合类型使用 `list[X]`、`dict[K, V]`
 - `Optional[X]` 统一写成 `X | None`
+
+### 代码格式
+
+- 每行代码不超过 120 字符
+- 函数参数过多时，分行书写

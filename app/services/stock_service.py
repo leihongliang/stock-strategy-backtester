@@ -1,20 +1,18 @@
+from datetime import datetime
+
 import pandas as pd
 from pandas import DataFrame
-import time
-from datetime import datetime, date, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import akshare as ak
-from app.repositories.mongodb import MongoDBRepository
+
+from app.config.settings import settings
 from app.models.stock import StockDailyPrice
-from app.models.company import StockCompany
-from app.models.trade_calendar import TradeCalendar
+from app.repositories.mongodb import MongoDBRepository
 from app.services.data_sources.akshare_provider import AkShareProvider
 from app.services.data_sources.tushare_provider import TushareProvider
 from app.services.stock_company_service import StockCompanyService
 from app.services.trade_calendar_service import TradeCalendarService
-from app.config.settings import settings
 from app.utils.log import logger
-from app.services.strategies import validate_strategy
+
+
 class StockService:
     """股票服务
     
@@ -32,11 +30,13 @@ class StockService:
         self.trade_calendar_service = TradeCalendarService()
         logger.info("使用MongoDB作为数据库")
 
-    def get_all_funds(self) -> list[StockCompany]:
-        """获取所有基金列表"""
-        return self.stock_company_service.get_all_funds()
-
-    def get_daily_k_data(self, stock_code: str, start_date: str, end_date: str, data_source: str = "akshare") -> tuple[str, DataFrame | None]:
+    def get_daily_k_data(
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        data_source: str = "akshare"
+    ) -> tuple[str, DataFrame | None]:
         """获取证券日K线数据
         
         自动查询数据库判断证券类型，选择对应的数据源。
@@ -75,7 +75,13 @@ class StockService:
             logger.error(f"获取{stock_code}日K线数据失败: {e}")
             return stock_code, None
     
-    def get_daily_k_data_batch(self, stock_codes: list[str], start_date: str, end_date: str, data_source: str = "akshare") -> list[StockDailyPrice]:
+    def get_daily_k_data_batch(
+        self,
+        stock_codes: list[str],
+        start_date: str,
+        end_date: str,
+        data_source: str = "akshare"
+    ) -> list[StockDailyPrice]:
         """批量获取证券日K线数据
         
         Args:
@@ -95,7 +101,7 @@ class StockService:
                 if data is not None and not data.empty:
                     # 计算昨收价、涨跌额和涨跌幅
                     data['pre_close'] = data['close'].shift(1)
-                    data['pre_close'].fillna(data['open'].iloc[0], inplace=True)
+                    data['pre_close'] = data['pre_close'].fillna(data['open'].iloc[0])
                     data['change'] = data['close'] - data['pre_close']
                     data['pct_chg'] = (data['change'] / data['pre_close']) * 100
                     
@@ -201,19 +207,7 @@ class StockService:
 
         return k_data
 
-    def save_stock_companies(self) -> bool:
-        """全量更新A股公司信息到数据库"""
-        return self.stock_company_service.save_all_stock_companies()
-    
-    def get_stock_companies_from_db(self) -> list:
-        """从数据库获取所有公司信息"""
-        return self.stock_company_service.get_stock_companies_from_db()
-    
-    def get_stock_company_by_code(self, stock_code: str) -> dict | StockCompany | None:
-        """根据股票代码从数据库获取公司信息"""
-        return self.stock_company_service.get_stock_company_by_code(stock_code)
-    
-    def get_all_a_stocks_from_db(self):
+    def get_all_a_stocks_from_db(self) -> list[str]:
         """从数据库的stock_daily_price表获取所有A股股票列表
         
         Returns:
@@ -225,7 +219,13 @@ class StockService:
             logger.error(f"从数据库获取A股股票列表失败: {e}")
             return []
     
-    def sync_stock_data_in_range(self, start_date: str, end_date: str, stock_codes: list[str] | None = None, data_source: str = "tushare") -> dict:
+    def sync_stock_data_in_range(
+        self,
+        start_date: str,
+        end_date: str,
+        stock_codes: list[str] | None = None,
+        data_source: str = "tushare"
+    ) -> dict:
         """同步固定时间范围内的股票数据到数据库
         
         从数据库获取股票列表，然后按天同步指定时间范围内的股票数据。
@@ -273,7 +273,10 @@ class StockService:
             logger.error("没有股票需要同步")
             return {"message": "没有股票需要同步", "success": False}
         
-        logger.info(f"开始同步 {len(stocks_to_sync)} 只股票的数据，时间范围: {start_date} 至 {end_date}")
+        logger.info(
+            f"开始同步 {len(stocks_to_sync)} 只股票的数据，"
+            f"时间范围: {start_date} 至 {end_date}"
+        )
         
         # 获取交易日
         trading_days = self.trade_calendar_service.get_trading_days(start_date, end_date)
@@ -342,14 +345,20 @@ class StockService:
                     chunk = stocks_to_sync[i:i+batch_size]
                     chunk_start = i + 1
                     chunk_end = min(i + batch_size, len(stocks_to_sync))
-                    logger.info(f"处理第 {i//batch_size + 1}/{total_chunks} 批股票，范围: {chunk_start}-{chunk_end}")
+                    logger.info(
+                        f"处理第 {i//batch_size + 1}/{total_chunks} 批股票，"
+                        f"范围: {chunk_start}-{chunk_end}"
+                    )
                     
                     # 使用批量方法获取数据
                     logger.info(f"开始获取第 {i//batch_size + 1} 批数据，共 {len(chunk)} 只股票")
                     k_data = self.get_daily_k_data_batch(chunk, date_str, date_str, data_source)
 
                     if k_data and len(k_data) > 0:
-                        logger.info(f"获取第 {i//batch_size + 1} 批数据成功，共 {len(k_data)} 条记录，开始保存到数据库")
+                        logger.info(
+                            f"获取第 {i//batch_size + 1} 批数据成功，"
+                            f"共 {len(k_data)} 条记录，开始保存到数据库"
+                        )
                         # 保存数据
                         success = self.repo.save_stock_prices(k_data)
                         if success:
@@ -384,32 +393,22 @@ class StockService:
                 logger.error(f"处理 {single_date.strftime('%Y%m%d')} 时出错: {e}")
                 processed_days += 1
         
-        logger.info(f"同步完成，共处理 {processed_days} 天，成功保存 {saved_count} 天的数据，共 {total_records} 条记录")
+        logger.info(
+            f"同步完成，共处理 {processed_days} 天，"
+            f"成功保存 {saved_count} 天的数据，"
+            f"共 {total_records} 条记录"
+        )
         return {
-            "message": f"同步完成，共处理 {processed_days} 天，成功保存 {saved_count} 天的数据，共 {total_records} 条记录",
+            "message": (
+                f"同步完成，共处理 {processed_days} 天，"
+                f"成功保存 {saved_count} 天的数据，"
+                f"共 {total_records} 条记录"
+            ),
             "success": True,
             "processed_days": processed_days,
             "saved_days": saved_count,
             "total_records": total_records
         }
-    
-    def sync_trade_calendar(self, start_date: date | None = None, end_date: date | None = None) -> None:
-        """同步交易日历数据到数据库"""
-        self.trade_calendar_service.sync_trade_calendar(start_date, end_date)
-    
-    def validate_strategy(self, strategy_name: str, start_date: str | None = None, end_date: str | None = None) -> dict:
-        """根据策略从历史数据中找到符合的股票及其时间段区间，并验证之后几天的股票涨幅，计算策略的正确率
-        
-        Args:
-            strategy_name: 策略名称，目前支持 "strategy1"
-            start_date: 开始日期，格式为"YYYY-MM-DD"
-            end_date: 结束日期，格式为"YYYY-MM-DD"
-            
-        Returns:
-            dict: 包含符合条件的股票列表和策略正确率的结果
-        """
-
-        return validate_strategy(self, strategy_name, start_date, end_date)
     
     def daily_update(self) -> dict:
         """每日更新股票数据
@@ -427,12 +426,12 @@ class StockService:
             
             # 1. 更新交易日历到最新的一天
             logger.info("开始更新交易日历...")
-            self.sync_trade_calendar()
+            self.trade_calendar_service.sync_trade_calendar()
             results['calendar_update'] = {"success": True, "message": "交易日历更新完成"}
             
             # 2. 更新新增的A股公司，去掉没有的
             logger.info("开始更新A股公司信息...")
-            companies_result = self.save_stock_companies()
+            companies_result = self.stock_company_service.save_all_stock_companies()
             results['companies_update'] = {"success": companies_result, "message": "A股公司信息更新完成"}
             
             # 3. 更新日K线到最新的一天

@@ -1,14 +1,17 @@
 from fastapi import APIRouter, HTTPException
 from app.models.stock import StrategyValidationRequest, MultiStrategyBacktestRequest
-from app.services.stock_service import StockService
 import datetime
-from app.services.strategies import validate_513_strategy as validate_513, multi_strategy_backtest, validate_macd_rejuvenation
+from app.services.strategies import (
+    validate_strategy,
+    validate_513_strategy as validate_513,
+    multi_strategy_backtest,
+    validate_macd_rejuvenation
+)
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks-strategy"])
-stock_service = StockService()
 
 @router.post("/strategy/validate")
-def validate_strategy(request: StrategyValidationRequest):
+def validate_strategy_endpoint(request: StrategyValidationRequest):
     """根据策略从历史数据中找到符合的股票及其时间段区间，并验证之后几天的股票涨幅，计算策略的正确率
     
     目前支持的策略：
@@ -17,13 +20,11 @@ def validate_strategy(request: StrategyValidationRequest):
     - rising_surge_3: 513战法的英文名称
     """
     try:
-        # 验证策略
-        result = stock_service.validate_strategy(
+        result = validate_strategy(
             request.strategy_name,
             request.start_date,
             request.end_date
         )
-        
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
@@ -43,7 +44,6 @@ def backtest_multi_strategy(request: MultiStrategyBacktestRequest):
     """
     try:
         result = multi_strategy_backtest(
-            stock_service,
             request.stock_codes,
             request.start_date,
             request.end_date,
@@ -64,16 +64,13 @@ def validate_513_strategy(request: StrategyValidationRequest, consecutive_days: 
         verification_days: 后续验证天数，默认3天
     """
     try:
-        # 设置默认时间范围为近7天
         if not request.start_date or not request.end_date:
             end_date = datetime.date.today()
             start_date = end_date - datetime.timedelta(days=7)
             request.start_date = start_date.strftime("%Y-%m-%d")
             request.end_date = end_date.strftime("%Y-%m-%d")
         
-        # 调用策略验证函数
         result = validate_513(
-            stock_service,
             request.start_date,
             request.end_date,
             consecutive_days,
@@ -103,7 +100,6 @@ def validate_macd_rejuvenation_strategy(request: StrategyValidationRequest):
     """
     try:
         result = validate_macd_rejuvenation(
-            stock_service,
             request.start_date,
             request.end_date,
             request.stock_codes

@@ -4,9 +4,28 @@ from typing import Optional
 import pandas as pd
 
 from app.utils.log import logger
+from app.services.stock_company_service import StockCompanyService
 
 # 策略注册表
 STRATEGIES = {}
+
+stock_company_service = StockCompanyService()
+
+
+def _get_stock_service():
+    """延迟导入避免循环依赖"""
+    from app.services.stock_service import StockService
+    return StockService()
+
+
+stock_service = None
+
+
+def _ensure_stock_service():
+    global stock_service
+    if stock_service is None:
+        stock_service = _get_stock_service()
+    return stock_service
 
 def register_strategy(strategy_name):
     """注册策略函数的装饰器"""
@@ -32,21 +51,22 @@ def process_stock(stock_code: str, stock_service, strategy_func, start_date, end
     stock_name = ""
     market = ""
     # 尝试从数据库获取股票公司信息
-    company = stock_service.get_stock_company_by_code(stock_code)
+    company = stock_company_service.get_stock_company_by_code(stock_code)
     if company:
         stock_name = company.get('sec_name', '')
         market = company.get('market', '')
     
     # 只处理主板股票：沪市600/601/603/605开头，深市000开头
     stock_code_str = str(stock_code)
-    if not (stock_code_str.startswith('600') or stock_code_str.startswith('601') or stock_code_str.startswith('603') or stock_code_str.startswith('605') or stock_code_str.startswith('000')):
+    valid_prefixes = ('600', '601', '603', '605', '000')
+    if not any(stock_code_str.startswith(p) for p in valid_prefixes):
         logger.debug(f"跳过非主板股票: {stock_code} - {stock_name}")
         return {"matches": [], "total_cases": 0, "successful_cases": 0}
     
     logger.debug(f"处理股票: {stock_code} - {stock_name}")
     
     # Load data from database匹配时间段
-    k_data = stock_service.load_stock_data(stock_code)
+    k_data = _ensure_stock_service().load_stock_data(stock_code)
     
     if k_data is not None:
         logger.debug(f"成功加载 {stock_code} 的历史数据，共 {len(k_data)} 条记录")
@@ -85,18 +105,24 @@ def process_stock(stock_code: str, stock_service, strategy_func, start_date, end
                         return "N/A"
                     
                     # 打印详细日志（一行）
-                    logger.info(f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, 匹配时间段: {period}, 异动阳线后第四天开盘买入价格: {buy_day_open}, 5日后涨幅: {format_increase(five_day_increase)}, 10日后涨幅: {format_increase(ten_day_increase)}, 20日涨幅: {format_increase(twenty_day_increase)}")
+                    logger.info(
+                        f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, "
+                        f"匹配时间段: {period}, "
+                        f"异动阳线后第四天开盘买入价格: {buy_day_open}, "
+                        f"5日后涨幅: {format_increase(five_day_increase)}, "
+                        f"10日后涨幅: {format_increase(ten_day_increase)}, "
+                        f"20日涨幅: {format_increase(twenty_day_increase)}"
+                    )
         
         return strategy_result
     else:
         logger.warning(f"无法加载股票 {stock_code} 的历史数据")
         return None
 
-def validate_strategy(stock_service, strategy_name, start_date=None, end_date=None):
+def validate_strategy(strategy_name: str, start_date: str | None = None, end_date: str | None = None) -> dict:
     """基于历史数据验证股票策略
     
     参数:
-        stock_service: StockService实例
         strategy_name: 策略名称
         start_date: 开始日期，格式为"YYYY-MM-DD"
         end_date: 结束日期，格式为"YYYY-MM-DD"
@@ -111,7 +137,7 @@ def validate_strategy(stock_service, strategy_name, start_date=None, end_date=No
     logger.info(f"开始验证策略: {strategy_name}")
     logger.info(f"验证时间范围: {start_date} 至 {end_date}")
     
-    all_stocks = stock_service.get_all_a_stocks_from_db()
+    all_stocks = _ensure_stock_service().get_all_a_stocks_from_db()
     logger.info(f"获取到 {len(all_stocks)} 只A股股票")
     
     matching_stocks = []
@@ -130,7 +156,11 @@ def validate_strategy(stock_service, strategy_name, start_date=None, end_date=No
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务
-        futures = {executor.submit(process_stock, stock, stock_service, strategy_func, start_date, end_date): stock for stock in all_stocks}
+        futures = {
+            executor.submit(
+                process_stock, stock, strategy_func, start_date, end_date
+            ): stock for stock in all_stocks
+        }
         
         # 处理完成的任务
         for future in as_completed(futures):
@@ -161,11 +191,16 @@ def validate_strategy(stock_service, strategy_name, start_date=None, end_date=No
         'accuracy': accuracy
     }
 
-def validate_513_strategy(stock_service, start_date=None, end_date=None, consecutive_days=4, verification_days=3, stock_codes=None):
+def validate_513_strategy(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    consecutive_days: int = 4,
+    verification_days: int = 3,
+    stock_codes: list[str] | None = None
+) -> dict:
     """验证513战法（可自定义连续上涨天数和后续验证天数）
     
     参数:
-        stock_service: StockService实例
         start_date: 开始日期，格式为"YYYY-MM-DD"
         end_date: 结束日期，格式为"YYYY-MM-DD"
         consecutive_days: 连续上涨天数，默认4天
@@ -181,7 +216,7 @@ def validate_513_strategy(stock_service, start_date=None, end_date=None, consecu
     logger.info(f"后续验证天数: {verification_days}")
 
     if stock_codes is None:
-        stocks = stock_service.get_all_a_stocks_from_db()
+        stocks = _ensure_stock_service().get_all_a_stocks_from_db()
         logger.info(f"获取到 {len(stocks)} 只A股股票")
     else:
         stocks = stock_codes
@@ -203,21 +238,22 @@ def validate_513_strategy(stock_service, start_date=None, end_date=None, consecu
             stock_name = ""
             market = ""
             # 尝试从数据库获取股票公司信息
-            company = stock_service.get_stock_company_by_code(stock_code)
+            company = stock_company_service.get_stock_company_by_code(stock_code)
             if company:
                 stock_name = company.get('sec_name', '')
                 market = company.get('market', '')
             
             # 只处理主板股票：沪市600/601/603/605开头，深市000开头
             stock_code_str = str(stock_code)
-            if not (stock_code_str.startswith('600') or stock_code_str.startswith('601') or stock_code_str.startswith('603') or stock_code_str.startswith('605') or stock_code_str.startswith('000')):
+            valid_prefixes = ('600', '601', '603', '605', '000')
+            if not any(stock_code_str.startswith(p) for p in valid_prefixes):
                 logger.debug(f"跳过非主板股票: {stock_code} - {stock_name}")
                 return None
             
             logger.debug(f"处理股票: {stock_code} - {stock_name}")
             
             # Load data from database
-            k_data = stock_service.load_stock_data(stock_code)
+            k_data = _ensure_stock_service().load_stock_data(stock_code)
             
             if k_data is not None:
                 logger.debug(f"成功加载 {stock_code} 的历史数据，共 {len(k_data)} 条记录")
@@ -256,7 +292,14 @@ def validate_513_strategy(stock_service, start_date=None, end_date=None, consecu
                                 return "N/A"
                             
                             # 打印详细日志（一行）
-                            logger.info(f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, 异动日: {abnormal_up_day_date}, 买入价格: {buy_day_open}, 5日后涨幅: {format_increase(five_day_increase)}, 10日后涨幅: {format_increase(ten_day_increase)}, 20日涨幅: {format_increase(twenty_day_increase)}")
+                            logger.info(
+                                f"  - 股票代码: {stock_code}, 股票名称: {stock_name}, "
+                                f"异动日: {abnormal_up_day_date}, "
+                                f"买入价格: {buy_day_open}, "
+                                f"5日后涨幅: {format_increase(five_day_increase)}, "
+                                f"10日后涨幅: {format_increase(ten_day_increase)}, "
+                                f"20日涨幅: {format_increase(twenty_day_increase)}"
+                            )
                 
                 return strategy_result
             else:
@@ -429,13 +472,17 @@ ALL_STRATEGIES = ['ma5_ma20_cross', 'ma5_ma20_cross_ma60', 'ma5_ma20_cross_ma120
                   'price_breakout_20w_10w', 'buy_and_hold',
                   'macd_cross', 'macd_cross_ma60', 'macd_cross_ma120']
 
-def multi_strategy_backtest(stock_service, stock_codes, start_date, end_date, strategies=None):
+def multi_strategy_backtest(
+    stock_codes: list[str],
+    start_date: str,
+    end_date: str,
+    strategies: list[str] | None = None
+) -> dict:
     """多策略回测
     
     对指定股票列表和时间段运行多个策略，分析每个策略结束后的收益。
     
     Args:
-        stock_service: StockService实例
         stock_codes: 股票代码列表
         start_date: 开始日期，格式为"YYYY-MM-DD"
         end_date: 结束日期，格式为"YYYY-MM-DD"
@@ -469,12 +516,12 @@ def multi_strategy_backtest(stock_service, stock_codes, start_date, end_date, st
             try:
                 stock_name = ""
                 market = ""
-                company = stock_service.get_stock_company_by_code(stock_code)
+                company = stock_company_service.get_stock_company_by_code(stock_code)
                 if company:
                     stock_name = company.get('sec_name', '')
                     market = company.get('market', '')
                 
-                k_data = stock_service.load_stock_data(stock_code)
+                k_data = _ensure_stock_service().load_stock_data(stock_code)
                 
                 if k_data is not None:
                     start_date_dt = pd.to_datetime(start_date)
@@ -1225,13 +1272,12 @@ def macd_rejuvenation_strategy(filtered_data, stock_code, stock_name, market):
     }
 
 
-def validate_macd_rejuvenation(stock_service, start_date=None, end_date=None, stock_codes=None):
+def validate_macd_rejuvenation(start_date: str | None = None, end_date: str | None = None, stock_codes: list[str] | None = None) -> dict:
     """验证回春战法
 
     在指定时间段内扫描所有股票，寻找符合回春战法条件的股票。
 
     Args:
-        stock_service: StockService实例
         start_date: 开始日期，格式为"YYYY-MM-DD"
         end_date: 结束日期，格式为"YYYY-MM-DD"
         stock_codes: 股票代码列表，为None时验证所有股票
@@ -1240,7 +1286,7 @@ def validate_macd_rejuvenation(stock_service, start_date=None, end_date=None, st
         dict: 包含匹配股票和策略准确率的结果
     """
     if stock_codes is None:
-        stocks = stock_service.get_all_a_stocks_from_db()
+        stocks = _ensure_stock_service().get_all_a_stocks_from_db()
         logger.info(f"获取到 {len(stocks)} 只A股股票")
     else:
         stocks = stock_codes
@@ -1258,7 +1304,7 @@ def validate_macd_rejuvenation(stock_service, start_date=None, end_date=None, st
         try:
             stock_name = ""
             market = ""
-            company = stock_service.get_stock_company_by_code(stock_code)
+            company = stock_company_service.get_stock_company_by_code(stock_code)
             if company:
                 stock_name = company.get('sec_name', '')
                 market = company.get('market', '')
@@ -1269,7 +1315,7 @@ def validate_macd_rejuvenation(stock_service, start_date=None, end_date=None, st
                     stock_code_str.startswith('000')):
                 return None
 
-            k_data = stock_service.load_stock_data(stock_code)
+            k_data = _ensure_stock_service().load_stock_data(stock_code)
             if k_data is None:
                 return None
 

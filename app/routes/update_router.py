@@ -2,15 +2,19 @@ from fastapi import APIRouter, HTTPException
 
 from app.models.stock import SyncStockDataRequest
 from app.services.stock_service import StockService
+from app.services.stock_company_service import StockCompanyService
+from app.services.trade_calendar_service import TradeCalendarService
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks-update"])
 stock_service = StockService()
+stock_company_service = StockCompanyService()
+trade_calendar_service = TradeCalendarService()
 
 @router.post("/companies")
 def refresh_stock_companies():
     """获取所有A股公司信息并存入数据库"""
     try:
-        success = stock_service.save_stock_companies()
+        success = stock_company_service.save_all_stock_companies()
         if success:
             return {"message": "A股公司信息获取并保存成功"}
         else:
@@ -46,7 +50,6 @@ def sync_trade_calendar(start_date: str = None, end_date: str = None):
         end_date: 结束日期，格式为"YYYYMMDD"，默认到当天
     """
     try:
-        # 转换日期格式
         start_date_obj = None
         end_date_obj = None
         
@@ -58,20 +61,14 @@ def sync_trade_calendar(start_date: str = None, end_date: str = None):
             from datetime import datetime
             end_date_obj = datetime.strptime(end_date, "%Y%m%d").date()
         
-        result = stock_service.sync_trade_calendar(start_date=start_date_obj, end_date=end_date_obj)
-        return result
+        trade_calendar_service.sync_trade_calendar(start_date=start_date_obj, end_date=end_date_obj)
+        return {"message": "交易日历同步完成"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 @router.post("/daily-update")
 def daily_update():
-    """每日更新股票数据
-    
-    执行以下操作：
-    1. 更新交易日历到最新的一天
-    2. 更新新增的A股公司，去掉没有的
-    3. 更新日K线到最新的一天
-    """
+    """每日更新股票数据"""
     try:
         result = stock_service.daily_update()
         return result
